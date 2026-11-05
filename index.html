@@ -182,6 +182,22 @@ button:not(:disabled):hover{filter:brightness(1.12)}
 
 <!-- PeerJS: uses a copy next to this page if you upload one (peerjs.min.js), otherwise the public CDN -->
 <script src="peerjs.min.js"></script>
+<!-- Online play through Firebase (free, Google-run). Paste your Firebase web config below to turn it on.
+     Leave it empty and the game uses PeerJS instead. Setup steps are in the README. -->
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyCj9HO13WFehle0xAHpVkoZ25055RDZdlE",
+  authDomain: "claimline-d8b8d.firebaseapp.com",
+  databaseURL: "https://claimline-d8b8d-default-rtdb.firebaseio.com",
+  projectId: "claimline-d8b8d",
+  storageBucket: "claimline-d8b8d.firebasestorage.app",
+  messagingSenderId: "349030330541",
+  appId: "1:349030330541:web:40758ba05acc3b17715624",
+  measurementId: "G-WXXFC5D1W2"
+};
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>if(!window.Peer)document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <script>
 (()=>{
@@ -1037,6 +1053,29 @@ function linkGame(kind,code,role){return new Promise((resolve,reject)=>{
     destroy=()=>{post(role==='host'?{t:'bye',role:'host'}:{t:'bye',to:'host'});ch.close()};
     if(role==='client')post({t:'hi',to:'host'});
     resolve(api);return}
+  // Firebase Realtime Database: rooms/<code>/host holds the host's state, rooms/<code>/players/<id> each player's orders
+  if(kind==='fb'){
+    const db=fbDb();if(!db)return reject(new Error('unavailable'));const base='rooms/'+code;
+    const throttle=(fn,ms)=>{let last=0,tm=0,pend=null;return v=>{pend=v;const now=Date.now();if(now-last>=ms){last=now;fn(pend);pend=null}else if(!tm)tm=setTimeout(()=>{tm=0;last=Date.now();if(pend!==null){fn(pend);pend=null}},ms-(now-last))}};
+    if(role==='host'){
+      myId='h'+Math.random().toString(36).slice(2,10);const hostRef=db.ref(base+'/host'),plRef=db.ref(base+'/players');
+      hostRef.once('value').then(snap=>{if(snap.val())return reject(new Error('taken'));
+        db.ref(base).onDisconnect().remove();
+        const push=throttle(p=>hostRef.set({id:myId,p:clean(p),at:Date.now()}).catch(()=>{}),120);
+        sendAll=m=>push(m.p);
+        plRef.on('value',snap=>{const v=snap.val()||{};others.clear();for(const id in v)if(v[id]&&v[id].p)others.set(id,clean(v[id].p));emit()});
+        destroy=()=>{plRef.off();db.ref(base).remove().catch(()=>{})};
+        hostRef.set({id:myId,p:{},at:Date.now()}).then(()=>resolve(api),reject)}).catch(reject)}
+    else{
+      myId='c'+Math.random().toString(36).slice(2,10);const hostRef=db.ref(base+'/host'),me=db.ref(base+'/players/'+myId);
+      hostRef.once('value').then(snap=>{if(!snap.val())return reject(new Error('nogame'));
+        me.onDisconnect().remove();
+        const push=throttle(p=>me.set({p:clean(p)}).catch(()=>{}),120);
+        sendHost=m=>push(m.p);
+        hostRef.on('value',snap=>{const v=snap.val();others.clear();if(v)others.set(v.id||'host',clean(v.p));emit()});
+        destroy=()=>{hostRef.off();me.remove().catch(()=>{})};
+        resolve(api)}).catch(reject)}
+    return}
   // p2p via PeerJS
   if(!window.Peer)return reject(new Error('unavailable'));
   const roomId='claimline-v1-'+code;
@@ -1062,14 +1101,24 @@ function linkGame(kind,code,role){return new Promise((resolve,reject)=>{
       conn.on('data',m=>{if(m&&m.t==='p'&&typeof m.p==='object'){others.clear();others.set(roomId,clean(m.p));emit()}});
       conn.on('close',()=>{others.clear();emit()});conn.on('error',()=>{})})}
 })}
+// Firebase is used when the page provides a config (see the standalone site's window.CLAIMLINE_FIREBASE)
+let fbDbRef=null;
+function fbReady(){const c=window.CLAIMLINE_FIREBASE;return !!(c&&c.apiKey&&c.databaseURL&&window.firebase&&window.firebase.database)}
+function fbDb(){if(fbDbRef)return fbDbRef;if(!fbReady())return null;try{const app=window.firebase.apps&&window.firebase.apps.length?window.firebase.app():window.firebase.initializeApp(window.CLAIMLINE_FIREBASE);fbDbRef=app.database()}catch(e){console.error(e);return null}return fbDbRef}
+// open-games list: claude.ai lobby presence, or a lobby/<code> entry in Firebase
+let fbLobby={},fbLobbyOn=false;
+function announce(info){
+  if(net==='claude'){roomApi.presence({host:info}).catch(()=>{});return}
+  if(net==='fb'&&H_){const r=fbDb().ref('lobby/'+H_.code);if(info){r.onDisconnect().remove();r.set({...info,at:Date.now()}).catch(()=>{})}else r.remove().catch(()=>{})}}
+function watchLobby(){if(net!=='fb'||fbLobbyOn)return;fbLobbyOn=true;fbDb().ref('lobby').on('value',snap=>{fbLobby=snap.val()||{};if(screen==='online')renderGames()})}
 function openGame(code,role){
   if(net==='claude')return roomApi.join('cl-'+code);
   return linkGame(net,code,role)}
 const usePromise=window.claude?.use?window.claude.use('room'):Promise.resolve(null);
 usePromise.then(r=>{roomApi=r;
-  net=r?'claude':location.hash==='#local'&&window.BroadcastChannel?'local':window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';
+  net=r?'claude':location.hash==='#local'&&window.BroadcastChannel?'local':fbReady()?'fb':window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';
   if(r)r.onPeers(()=>{if(screen==='online')renderGames()},()=>{});
-  if(screen==='online')renderOnline();if(screen==='host')renderHost()}).catch(()=>{net=window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';if(screen==='online')renderOnline();if(screen==='host')renderHost()});
+  if(screen==='online')renderOnline();if(screen==='host')renderHost()}).catch(()=>{net=fbReady()?'fb':window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';if(screen==='online')renderOnline();if(screen==='host')renderHost()});
 
 function checksum(){let c=0;for(let i=0;i<N;i++)c=(Math.imul(c,31)+own[i]+2)|0;return c}
 function recordChecksum(){if(mode==='solo')return;const c=checksum();
@@ -1085,13 +1134,13 @@ async function hostGame(){
   for(let t=0;t<3&&!game;t++){code=newCode();try{game=await openGame(code,'host')}catch(e){game=null;if(t===2)return toast("Couldn't open a game room. Check your connection and try again.")}}
   mode='host';H_={code,phase:'lobby',map:selectedMap,type:'pangaea',seed:(Math.random()*1e6)|0,bots:botCount,players:[{p:'host',n:nick}],log:[],inputId:0,lastSeq:{},ck:null};
   unsubs.push(game.onPeers(onGamePeers,()=>{}));
-  if(net==='claude')roomApi.presence({host:{code,n:nick,c:1}}).catch(()=>{});
+  announce({code,n:nick,c:1});
   publishHost();renderRoomLobby();
 }
 async function joinGame(code){
   code=String(code||'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,8);if(!code)return toast("Enter a game code.");
   if(roomState!=='ok')return;toast('Connecting…');
-  try{game=await openGame(code,'client')}catch(e){game=null;return toast(net==='p2p'?"No game found with that code. Check it and try again.":"Couldn't join that game.")}
+  try{game=await openGame(code,'client')}catch(e){game=null;return toast(net==='p2p'||net==='fb'?"No game found with that code. Check it and try again.":"Couldn't join that game.")}
   mode='client';clientCode=code;myActs=[];mySeq=0;hostTick=0;maxSeenId=0;ckLocal=new Map();desynced=false;hostPeer=null;
   game.presence({n:nick,acts:[]}).catch(()=>{});
   unsubs.push(game.onPeers(onGamePeers,()=>{}));
@@ -1101,7 +1150,7 @@ async function joinGame(code){
 function leaveOnline(){
   unsubs.forEach(u=>{try{u()}catch{}});unsubs=[];
   if(game){game.leave().catch(()=>{});game=null}
-  if(mode==='host'&&net==='claude')roomApi.presence({host:null}).catch(()=>{});
+  if(mode==='host')announce(null);
   mode='solo';H_=null;hostPeer=null;running=false;clearTimeout(joinTimer);
 }
 
@@ -1112,7 +1161,7 @@ function onGamePeers(ch){
       const others=peers.filter(p=>!p.sameTab&&p.kind==='viewer'&&typeof p.presence?.n==='string'&&!p.presence.g)
         .sort((a,b)=>a.peer<b.peer?-1:1).slice(0,7);
       H_.players=[{p:myPeer||'host',n:nick},...others.map(p=>({p:p.peer,n:String(p.presence.n).slice(0,16)}))];
-      if(net==='claude')roomApi.presence({host:{code:H_.code,n:nick,c:H_.players.length}}).catch(()=>{});
+      announce({code:H_.code,n:nick,c:H_.players.length});
       publishHost();renderRoomLobby();
     }else{
       for(const p of peers){const idx=H_.players.findIndex(x=>x.p===p.peer);if(idx<1)continue;
@@ -1152,7 +1201,7 @@ function startOnline(seedV,type,names,bots,me){
 }
 function hostStart(){
   H_.phase='play';H_.bots=botCount;const rm=resolveMap(H_.map);H_.seed=rm.seed;H_.type=rm.type;
-  if(net==='claude')roomApi.presence({host:null}).catch(()=>{});
+  announce(null);
   startOnline(H_.seed,H_.type,H_.players.map(p=>p.n),H_.bots,0);publishHost();
 }
 
@@ -1242,6 +1291,11 @@ function renderOnline(){
 }
 function renderGames(){
   const ul=$('games');if(!ul)return;ul.innerHTML='';
+  if(net==='fb'){watchLobby();const now=Date.now(),list=Object.entries(fbLobby).filter(([c,v])=>v&&typeof v.n==='string'&&now-(+v.at||0)<10*60*1000).slice(0,8);
+    if(!list.length){const li=document.createElement('li');li.className='empty';li.textContent='No open games right now. Ask a friend for their code, or host your own.';ul.append(li);return}
+    for(const [c,v] of list){const li=document.createElement('li');const nm=document.createElement('span');nm.className='nm';nm.textContent=String(v.n).slice(0,16)+"'s game";
+      const meta=document.createElement('span');meta.className='meta';meta.textContent=(v.c|0)+'/8';const b=document.createElement('button');b.textContent='Join';
+      b.onclick=()=>{saveNick($('nick').value);joinGame(String(c))};li.append(nm,meta,b);ul.append(li)}return}
   if(net!=='claude'){const li=document.createElement('li');li.className='empty';li.textContent='Ask the host for their game code and enter it below.';ul.append(li);return}
   const hosts=roomApi?roomApi.peers().filter(p=>!p.sameTab&&p.presence?.host&&typeof p.presence.host.code==='string'):[];
   if(!hosts.length){const li=document.createElement('li');li.className='empty';li.textContent='No open games right now. Ask a friend for their code, or host your own.';ul.append(li);return}
@@ -1260,7 +1314,7 @@ function playerList(players,hostLabel){
 function renderRoomLobby(){
   if(mode!=='host'||H_.phase!=='lobby')return;screen='roomlobby';
   showCard(`<h1>Game <span class="code">${esc(H_.code)}</span></h1>
-  <p>Friends tap Join on the main menu and enter this code${net==='claude'?' (or pick your game from the list)':''}.</p>
+  <p>Friends tap Join on the main menu and enter this code${net==='claude'||net==='fb'?' (or pick your game from the list)':''}.</p>
   <div class="field"><h2>Players · ${H_.players.length}/8</h2><div id="plist"></div></div>
   <div class="field"><h2>Map</h2><div id="maplist"></div></div>
   ${diffPicker()}
