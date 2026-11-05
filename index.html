@@ -386,13 +386,13 @@ function claimDisc(cx,cy,r,o){for(let y=cy-r;y<=cy+r;y++)for(let x=cx-r;x<=cx+r;
   if(land[i]&&own[i]<0&&(x-cx)**2+(y-cy)**2<=r*r)setOwner(i,o)}}
 function spawnable(i){return land[i]&&compSize[comp[i]]>=MINISLE}
 // place every nation that has no land yet, spaced apart (a blocked mask keeps it fast with hundreds of realms)
-function placeRest(){
+function placeRest(skip=-1){
   const n=nat.length,r=spawnR();
   let minD=Math.max(r*2+2,Math.min(170,Math.sqrt(totalLand/n)*.75));
   const blocked=new Uint8Array(N);
   const block=(x0,y0,d)=>{const d2=d*d;for(let y=Math.max(0,y0-d);y<=Math.min(H-1,y0+d);y++)for(let x=Math.max(0,x0-d);x<=Math.min(W-1,x0+d);x++)if((x-x0)**2+(y-y0)**2<d2)blocked[y*W+x]=1};
   for(const a of nat)if(a.tiles>0){for(let i=0;i<N;i++)if(own[i]===a.id){block(i%W,(i/W)|0,Math.ceil(minD));break}}
-  for(const a of nat){if(a.tiles>0)continue;
+  for(const a of nat){if(a.tiles>0||a.id===skip)continue;
     for(let pass=0;pass<4&&a.tiles===0;pass++){
       for(let tries=0;tries<3000;tries++){const i=(rng()*N)|0;if(!spawnable(i)||own[i]>=0||(pass<3&&blocked[i]))continue;
         const x=i%W,y=(i/W)|0;claimDisc(x,y,r,a.id);block(x,y,Math.ceil(minD));break}
@@ -919,6 +919,9 @@ function tap(e){
   if(phase==='spawn'){
     if(!land[i])return toast("That's open water. Pick land.");
     if(!spawnable(i))return toast("That rock is too small. Pick a bigger island.");
+    if(own[i]>=0)return toast(`${nat[own[i]].name} already landed there. Pick open land.`);
+    {const cx=i%W,cy=(i/W)|0,r=spawnR();let free=0;for(let y=cy-r;y<=cy+r;y++)for(let x=cx-r;x<=cx+r;x++){if(x<0||y<0||x>=W||y>=H)continue;const j=y*W+x;if(land[j]&&own[j]<0&&(x-cx)**2+(y-cy)**2<=r*r)free++}
+      if(free<Math.max(8,r*r))return toast("Too cramped there, right next to a rival. Pick a spot with more open land.")}
     claimDisc(i%W,(i/W)|0,spawnR(),P);placeRest();$('banner').hidden=true;phase='play';running=true;updateUI();return}
   if(phase!=='play'||!nat[P].alive)return;
   if(!land[i])return toast("Right-click (or press and hold) the sea to build ships and oil rigs.");
@@ -1206,7 +1209,7 @@ function showSolo(){
   const warn=()=>$('botwarn').hidden=botCount<150;wireBots(warn);warn();
   $('back').onclick=showMenu;
   wireDiff();
-  $('go').onclick=()=>{for(let b=0;b<botCount;b++)addBot(b);shownDead=false;
+  $('go').onclick=()=>{for(let b=0;b<botCount;b++)addBot(b);placeRest(P);shownDead=false;$('banner').textContent='Rivals have landed. Tap open land to pick your spot · drag to pan';
     $('overlay').hidden=true;phase='spawn';screen='game';$('banner').hidden=false;$('exitBtn').hidden=false;$('modeTag').hidden=false;$('modeTag').textContent='SOLO · '+DF().name.toUpperCase()};
 }
 function showOnline(){screen='online';renderOnline()}
