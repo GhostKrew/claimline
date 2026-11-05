@@ -20,6 +20,16 @@ body{background:var(--sea);color:var(--ink);font-family:var(--f-display);font-si
   padding-block:8px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 header.bar{border-bottom-width:1px}
 footer.bar{border-top-width:1px}
+.bbar{flex:1 1 100%;display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;min-width:0;scrollbar-width:thin}
+.bslot{position:relative;flex:none;display:flex;align-items:center;gap:6px;padding:4px 8px 4px 4px;border:1px solid var(--line);border-radius:5px;background:var(--sea);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;text-transform:none;letter-spacing:0;font-weight:500}
+.bslot canvas{width:26px;height:26px;flex:none}
+.bslot .bn{display:flex;flex-direction:column;align-items:flex-start;line-height:1.05}
+.bslot .bn b{font-family:var(--f-data);font-size:14px;font-variant-numeric:tabular-nums}
+.bslot .bn small{font-family:var(--f-data);font-size:10px;color:var(--muted)}
+.bslot .bn em{font-style:normal;color:var(--gold)}
+.bslot.poor .bn small{color:var(--danger)}
+.bslot:active{cursor:grabbing}
+#dragGhost{position:fixed;z-index:20;pointer-events:none;width:34px;height:34px;margin:-17px 0 0 -17px;opacity:.9}
 .tbar{flex:1 1 100%;display:flex;flex-direction:column;gap:4px;min-width:0}
 .tlabels{display:flex;justify-content:space-between;gap:12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .tlabels b{font-family:var(--f-data);font-size:13px;letter-spacing:0;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -156,11 +166,13 @@ button:not(:disabled):hover{filter:brightness(1.12)}
       <div class="tlabels"><span><b id="tHome">0</b> / <span id="tCap">0</span> troops at home</span><span class="tfight">Fighting <b id="tFight">0</b></span></div>
       <div class="track" role="img" id="tTrack" aria-label="Troops"><i class="home" id="tHomeBar"></i><i class="fight" id="tFightBar"></i></div>
     </div>
+    <div class="bbar" id="bbar" role="toolbar" aria-label="Buildings: drag onto the map to build" hidden></div>
     <div class="send"><label for="ratio">Send <b id="ratioV">40%</b></label><input type="range" id="ratio" min="5" max="100" step="5" value="40"></div>
     <ol id="board"></ol>
   </footer>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 (()=>{
 const W=1600,H=1000,N=W*H;
@@ -287,7 +299,12 @@ const KINDS=[null,
   {id:'hbomb',name:'Hydrogen Bomb',cost:12000,desc:'Huge blast: wipes out everything within 50 tiles'},
   {id:'airport',name:'Airport',cost:1800,desc:'Sends trade planes for gold, builds aircraft'},
   {id:'fighter',name:'Fighter',cost:1300,desc:'Shoots down enemy planes and strafes boats'},
-  {id:'bomber',name:'Bomber Strike',cost:1600,desc:'Flies in from your airport, flattens buildings and troops within 10 tiles'}];
+  {id:'bomber',name:'Bomber Strike',cost:1600,desc:'Flies in from your airport, flattens buildings and troops within 10 tiles'},
+  {id:'oil',name:'Oil Rig',cost:3000,desc:'+30 gold/s at sea. Takes 90 s to build; enemy warships can seize it'},
+  {id:'airlift',name:'Troop Plane',cost:0,desc:'Flies part of your army from your airport and lands it right here'}];
+// construction time in ticks (10 ticks = 1 second)
+const BUILD_T={1:150,2:100,3:120,4:80,5:300,8:200,12:250,15:900};
+const OIL_R=30,OIL_SEIZE=8,MAX_AIRLIFT=3;
 const isAir=k=>k===13,AIR={trade:{speed:3.2,hp:20},fighter:{speed:4,hp:70,range:10,dmg:14,cool:4},bomber:{speed:2.6,hp:80,r:10}};
 const isBomb=k=>k===7||k===11,BOMB_R={7:26,11:50};
 // warship stats by kind: hp, gun range (tiles), damage per shot, ticks between shots, tiles moved per tick
@@ -297,21 +314,30 @@ const NUKE_R=26,SHIP_HP=100;
 let planes=[],ships=[],missiles=[],blasts=[],traders=[],tradePaths=new Map(),shots=[],floats=[];const scorch=new Uint8Array(N);
 const FORT_R=22;
 let buildings=[];const bAt=new Int32Array(N).fill(-1),fortOwner=new Int16Array(N).fill(-1);
-const cap=n=>100+n.tiles*6+n.b[1]*500;
-const costOf=(n,k)=>isBomb(k)||k===14?KINDS[k].cost:Math.round(KINDS[k].cost*(1+(k===5?1:isWar(k)?.5:.6)*n.b[k]));
+const cap=n=>100+n.tiles*6+n.e[1]*500;
+const ready=b=>!b.dead&&!(b.done>simTick);
+const bOwner=b=>b.k===15?b.o:own[b.t];
+const costOf=(n,k)=>isBomb(k)||k===14||k===16?KINDS[k].cost:Math.round(KINDS[k].cost*(1+(k===5?1:isWar(k)?.5:.6)*n.b[k]));
 function canPlace(id,tile){if(tile<0||tile>=N||!land[tile]||own[tile]!==id)return false;const x=tile%W,y=(tile/W)|0;
   for(let dy=-7;dy<=7;dy++)for(let dx=-7;dx<=7;dx++){const xx=x+dx,yy=y+dy;if(xx<0||yy<0||xx>=W||yy>=H)continue;if(bAt[yy*W+xx]>=0)return false}return true}
 // nearest of id's coastal tiles within 12 tiles of tile, then the water next to it
 function nearCoast(id,tile){if(tile<0||tile>=N||own[tile]!==id)return -1;const x0=tile%W,y0=(tile/W)|0;let best=-1,bd=1e9;
   for(let dy=-12;dy<=12;dy++)for(let dx=-12;dx<=12;dx++){const x=x0+dx,y=y0+dy;if(x<0||y<0||x>=W||y>=H)continue;const i=y*W+x,d=dx*dx+dy*dy;if(d<bd&&d<=144&&isCoast[i]&&own[i]===id){bd=d;best=i}}return best}
 function shipSpot(id,tile){const c=nearCoast(id,tile);if(c<0)return -1;for(let k=0;k<4;k++){const n=nbs[c*4+k];if(n>=0&&!land[n])return n}return -1}
-function nearestSilo(id,tile){let best=-1,bd=1e18;const tx=tile%W,ty=(tile/W)|0;for(const b of buildings){if(b.dead||b.k!==5||own[b.t]!==id)continue;const dx=b.t%W-tx,dy=((b.t/W)|0)-ty,d=dx*dx+dy*dy;if(d<bd){bd=d;best=b.t}}return best}
-function nearestAirport(id,tile){let best=null,bd=1e18;for(const b of buildings){if(b.dead||b.k!==12||own[b.t]!==id)continue;const d=d2(b.t,tile);if(d<bd){bd=d;best=b}}return best}
-function nearestPort(id,tile){let best=null,bd=1e18;for(const b of buildings){if(b.dead||b.k!==8||own[b.t]!==id)continue;const d=d2(b.t,tile);if(d<bd){bd=d;best=b}}return best}
+function nearestSilo(id,tile){let best=-1,bd=1e18;const tx=tile%W,ty=(tile/W)|0;for(const b of buildings){if(!ready(b)||b.k!==5||own[b.t]!==id)continue;const dx=b.t%W-tx,dy=((b.t/W)|0)-ty,d=dx*dx+dy*dy;if(d<bd){bd=d;best=b.t}}return best}
+function nearestAirport(id,tile){let best=null,bd=1e18;for(const b of buildings){if(!ready(b)||b.k!==12||own[b.t]!==id)continue;const d=d2(b.t,tile);if(d<bd){bd=d;best=b}}return best}
+function nearestPort(id,tile){let best=null,bd=1e18;for(const b of buildings){if(!ready(b)||b.k!==8||own[b.t]!==id)continue;const d=d2(b.t,tile);if(d<bd){bd=d;best=b}}return best}
+// an oil rig goes on open water within OIL_R tiles of your land, away from other buildings
+function rigOk(id,tile){if(tile<0||tile>=N||land[tile])return false;const x0=tile%W,y0=(tile/W)|0;let near=false;
+  for(let dy=-10;dy<=10;dy++)for(let dx=-10;dx<=10;dx++){const x=x0+dx,y=y0+dy;if(x<0||y<0||x>=W||y>=H)continue;if(bAt[y*W+x]>=0)return false}
+  for(let dy=-OIL_R;dy<=OIL_R&&!near;dy+=2)for(let dx=-OIL_R;dx<=OIL_R;dx+=2){const x=x0+dx,y=y0+dy;if(x<0||y<0||x>=W||y>=H)continue;if(own[y*W+x]===id&&dx*dx+dy*dy<=OIL_R*OIL_R){near=true;break}}
+  return near}
+function placeable(id,tile,k){if(k===15)return rigOk(id,tile);if(k===8)return shipSpot(id,tile)>=0&&canPlace(id,tile);return canPlace(id,tile)}
 function build(id,tile,k){const n=nat[id];if(!n||!n.alive||!KINDS[k]||tile<0||tile>=N)return false;const c=costOf(n,k);if(n.gold<c)return false;
-  if(isWar(k)){if(own[tile]!==id)return false;const pt=nearestPort(id,tile);if(!pt)return false;const w=pt.w;n.gold-=c;n.b[k]++;const T=SHIPT[k];ships.push({a:id,k,at:w,home:w,tgt:-1,hp:T.hp,max:T.hp,stuck:0,cd:0,mv:0});return true}
-  if(k===8){const w=shipSpot(id,tile);if(w<0||!canPlace(id,tile))return false;n.gold-=c;n.b[8]++;bAt[tile]=buildings.length;buildings.push({t:tile,k:8,w,cd:60+Math.floor(rng()*60)});return true}
-  if(k===12){if(!canPlace(id,tile))return false;n.gold-=c;n.b[12]++;bAt[tile]=buildings.length;buildings.push({t:tile,k:12,cd:80+Math.floor(rng()*80)});return true}
+  if(isWar(k)){if(land[tile])return false;const pt=nearestPort(id,tile);if(!pt)return false;const w=pt.w;n.gold-=c;n.b[k]++;const T=SHIPT[k];ships.push({a:id,k,at:w,home:tile,tgt:tile,hp:T.hp,max:T.hp,stuck:0,cd:0,mv:0});return true}
+  if(k===15){if(!rigOk(id,tile))return false;n.gold-=c;n.b[15]++;bAt[tile]=buildings.length;buildings.push({t:tile,k:15,o:id,done:simTick+BUILD_T[15]});return true}
+  if(k===8){const w=shipSpot(id,tile);if(w<0||!canPlace(id,tile))return false;n.gold-=c;n.b[8]++;bAt[tile]=buildings.length;buildings.push({t:tile,k:8,w,cd:60+Math.floor(rng()*60),done:simTick+BUILD_T[8]});return true}
+  if(k===12){if(!canPlace(id,tile))return false;n.gold-=c;n.b[12]++;bAt[tile]=buildings.length;buildings.push({t:tile,k:12,cd:80+Math.floor(rng()*80),done:simTick+BUILD_T[12]});return true}
   if(k===13){if(own[tile]!==id)return false;const ap=nearestAirport(id,tile);if(!ap)return false;n.gold-=c;n.b[13]++;
     planes.push({a:id,k:13,x:ap.t%W,y:(ap.t/W)|0,hx:ap.t%W,hy:(ap.t/W)|0,hp:AIR.fighter.hp,max:AIR.fighter.hp,cd:0,tx:-1,ty:-1});return true}
   if(k===14){if(own[tile]===id||!land[tile])return false;const ap=nearestAirport(id,tile);if(!ap)return false;n.gold-=c;
@@ -319,15 +345,15 @@ function build(id,tile,k){const n=nat[id];if(!n||!n.alive||!KINDS[k]||tile<0||ti
   if(isBomb(k)){if(own[tile]===id)return false;const from=nearestSilo(id,tile);if(from<0)return false;n.gold-=c;
     const dx=tile%W-from%W,dy=((tile/W)|0)-((from/W)|0);missiles.push({a:id,from,to:tile,t:0,r:BOMB_R[k],dur:Math.min(80,(k===11?35:25)+Math.round(Math.sqrt(dx*dx+dy*dy)/20))});return true}
   if(!canPlace(id,tile))return false;
-  n.gold-=c;n.b[k]++;bAt[tile]=buildings.length;buildings.push({t:tile,k});return true}
-function recount(){for(const n of nat)n.b=new Array(15).fill(0);fortOwner.fill(-1);
-  for(const s of ships)nat[s.a].b[s.k]++;
-  for(const q of planes)if(q.k===13)nat[q.a].b[13]++;
-  for(const b of buildings){if(b.dead)continue;const o=own[b.t];if(o<0)continue;nat[o].b[b.k]++;
+  n.gold-=c;n.b[k]++;bAt[tile]=buildings.length;buildings.push({t:tile,k,done:simTick+(BUILD_T[k]||0)});return true}
+function recount(){for(const n of nat){n.b=new Array(17).fill(0);n.e=new Array(17).fill(0)}fortOwner.fill(-1);
+  for(const s of ships){nat[s.a].b[s.k]++;nat[s.a].e[s.k]++}
+  for(const q of planes)if(q.k===13){nat[q.a].b[13]++;nat[q.a].e[13]++}
+  for(const b of buildings){if(b.dead)continue;const o=bOwner(b);if(o<0)continue;nat[o].b[b.k]++;if(!ready(b))continue;nat[o].e[b.k]++;
     if(b.k===4){const x=b.t%W,y=(b.t/W)|0;for(let dy=-FORT_R;dy<=FORT_R;dy++)for(let dx=-FORT_R;dx<=FORT_R;dx++){if(dx*dx+dy*dy>FORT_R*FORT_R)continue;
       const xx=x+dx,yy=y+dy;if(xx<0||yy<0||xx>=W||yy>=H)continue;const i=yy*W+xx;if(own[i]===o)fortOwner[i]=o}}}}
 
-function addNation(name,rgb,bot){nat.push({id:nat.length,name,rgb,troops:200,gold:400,b:new Array(15).fill(0),tiles:0,coast:0,sx:0,sy:0,alive:true,grudge:{},bot,cool:20+Math.floor(rng()*30),bcool:60+Math.floor(rng()*120)});borders.push(new Set())}
+function addNation(name,rgb,bot){nat.push({id:nat.length,name,rgb,troops:200,gold:400,b:new Array(17).fill(0),tiles:0,coast:0,sx:0,sy:0,alive:true,e:new Array(17).fill(0),grudge:{},bot,cool:20+Math.floor(rng()*30),bcool:60+Math.floor(rng()*120)});borders.push(new Set())}
 const PRE=["Ash","Bren","Cal","Dun","Esk","Fer","Gal","Hal","Isel","Kad","Mor","Orr","Quill","Sable","Tarn","Uld","Vess","Wyn","Thal","Ren"];
 const SUF=["mark","vale","moor","reach","gard","holt","wick","ford","crest","lund","haven","fell","by","mere","stead","wold","hurst","shire","dale","port"];
 const botName=k=>k<NAMES.length?NAMES[k]:PRE[k%20]+SUF[(Math.floor(k/20)+k)%20];
@@ -424,12 +450,17 @@ function launchBoat(id,tile,troops){if(boats.filter(b=>b.a===id).length>=MAXBOAT
   boats.push({a:id,troops,path:r.path,pos:0,hp:30+Math.min(troops,600)*.1});return true}
 function stepBoats(){
   boats=boats.filter(b=>{const A=nat[b.a];if(!A.alive)return false;b.pos+=BOAT_SPEED;if(b.pos<b.path.length-1)return true;
-    const L=b.path[b.path.length-1],o=own[L];
-    if(o===b.a){A.troops+=b.troops;return false}
-    const D=o>=0?nat[o]:null,cost=D?(1.6+(D.troops/Math.max(1,D.tiles))*1.1)*(fortOwner[L]===o?2.5:1):1.1;
-    if(b.troops<cost)return false;
-    setOwner(L,b.a);b.troops-=cost;if(D){D.troops=Math.max(0,D.troops-(D.troops/Math.max(1,D.tiles))*.85);if(D.tiles===0)kill(D.id)}
-    if(b.troops>=2)launch(b.a,o,b.troops,L%W,(L/W)|0);return false})}
+    landTroops(b.a,b.path[b.path.length-1],b.troops);return false})}
+function landTroops(a,L,troops){const A=nat[a],o=own[L];
+  if(o===a){A.troops+=troops;return}
+  const D=o>=0?nat[o]:null,cost=D?(1.6+(D.troops/Math.max(1,D.tiles))*1.1)*(fortOwner[L]===o?2.5:1):1.1;
+  if(troops<cost)return;
+  setOwner(L,a);troops-=cost;if(D){D.troops=Math.max(0,D.troops-(D.troops/Math.max(1,D.tiles))*.85);if(D.tiles===0)kill(D.id)}
+  if(troops>=2)launch(a,o,troops,L%W,(L/W)|0)}
+// ---------- troop planes ----------
+function launchAirlift(id,tile,troops){if(!land[tile]||own[tile]===id)return false;if(planes.filter(q=>q.a===id&&q.k===16).length>=MAX_AIRLIFT)return false;
+  const ap=nearestAirport(id,tile);if(!ap)return false;const hp=30+Math.min(troops,600)*.08;
+  planes.push({a:id,k:16,x:ap.t%W,y:(ap.t/W)|0,tx:tile%W,ty:(tile/W)|0,dest:tile,troops,hp,max:hp});return true}
 
 // ---------- warships + nukes ----------
 const boatTile=b=>b.path[Math.min(b.path.length-1,Math.floor(b.pos))];
@@ -475,13 +506,14 @@ function airStrike(a,cx,cy,R){
   blasts.push({c:cy*W+cx,r:R,at:performance.now(),small:true})}
 function stepAir(){
   // trade planes from airports
-  const aps=buildings.filter(b=>!b.dead&&b.k===12&&own[b.t]>=0);
+  const aps=buildings.filter(b=>ready(b)&&b.k===12&&own[b.t]>=0);
   if(aps.length>=2)for(const ap of aps){if(--ap.cd>0)continue;ap.cd=150+Math.floor(rng()*110);if(planes.filter(q=>q.k===0).length>=MAX_TRADE_PLANES)continue;
     const o=own[ap.t];let dest=null;for(let t=0;t<6;t++){const c=aps[Math.floor(rng()*aps.length)];if(c===ap)continue;dest=c;if(own[c.t]!==o)break}
     if(!dest)continue;planes.push({a:o,k:0,x:ap.t%W,y:(ap.t/W)|0,tx:dest.t%W,ty:(dest.t/W)|0,dest:dest.t,dist:Math.sqrt(d2(ap.t,dest.t)),hp:AIR.trade.hp})}
   for(const q of planes){if(q.hp<=0)continue;q.px=q.x;q.py=q.y;
     if(q.k===0){if(flyTo(q,q.tx,q.ty,AIR.trade.speed)){q.hp=0;q.done=true;const g=Math.round(50+q.dist*.35);nat[q.a].gold+=g;const d=own[q.dest];
       if(d>=0&&d!==q.a&&nat[d].alive)nat[d].gold+=Math.round(g*.3);if(q.a===P)floats.push({t:q.dest,text:'+'+g,at:performance.now()})}}
+    else if(q.k===16){if(flyTo(q,q.tx,q.ty,2.4)){q.hp=0;landTroops(q.a,q.dest,q.troops)}}
     else if(q.k===14){if(!q.back){if(flyTo(q,q.tx,q.ty,AIR.bomber.speed)){airStrike(q.a,q.tx,q.ty,AIR.bomber.r);q.back=true}}
       else if(flyTo(q,q.hx,q.hy,AIR.bomber.speed))q.hp=0}
     else if(q.k===13){const F=AIR.fighter;if(q.cd>0)q.cd--;
@@ -493,8 +525,13 @@ function stepAir(){
         if(bt&&q.cd<=0){bt.hp-=F.dmg*.5;q.cd=F.cool;const t=boatTile(bt);shots.push({a:Math.round(q.y)*W+Math.round(q.x),b:t,at:performance.now()})}
         if(q.tx<0||flyTo(q,q.tx,q.ty,F.speed*.6)){q.tx=Math.max(0,Math.min(W-1,q.hx+Math.round((rng()-.5)*130)));q.ty=Math.max(0,Math.min(H-1,q.hy+Math.round((rng()-.5)*130)))}}}}
   planes=planes.filter(q=>q.hp>0&&nat[q.a].alive)}
+function stepRigs(){if(simTick%5)return;
+  for(const b of buildings){if(b.dead||b.k!==15)continue;if(b.o>=0&&!nat[b.o].alive)b.o=-1;
+    let mine=false,taker=-1;const R2=OIL_SEIZE*OIL_SEIZE;
+    for(const s of ships){if(d2(s.at,b.t)>R2)continue;if(s.a===b.o)mine=true;else if(taker<0)taker=s.a}
+    if(taker>=0&&!mine){if(b.o>=0)provoke(b.o,taker);b.o=taker}}}
 function stepTrade(){
-  const ports=buildings.filter(b=>!b.dead&&b.k===8&&own[b.t]>=0);
+  const ports=buildings.filter(b=>ready(b)&&b.k===8&&own[b.t]>=0);
   if(ports.length>=2)for(const p of ports){if(--p.cd>0)continue;p.cd=140+Math.floor(rng()*120);if(traders.length>=MAX_TRADERS)continue;
     const o=own[p.t];let dest=null;for(let t=0;t<6;t++){const c=ports[Math.floor(rng()*ports.length)];if(c===p)continue;dest=c;if(own[c.t]!==o)break}
     if(!dest)continue;const path=waterPath(p.w,dest.w);if(!path||path.length<8)continue;
@@ -517,7 +554,8 @@ function detonate(a,c,R){
   blasts.push({c,r:R,at:performance.now()})}
 
 // the one way any player's order enters the simulation
-function applyInput(id,tile,r,k){if(k>=1&&k<=14){build(id,tile,k);return}const n=nat[id];if(!n||!n.alive||tile<0||tile>=N||!land[tile])return;const t=own[tile];
+function applyInput(id,tile,r,k){if(k===16){const n=nat[id];if(!n||!n.alive)return;const send=Math.floor(n.troops*r/100);if(send>=5&&launchAirlift(id,tile,send))n.troops-=send;return}
+  if(k>=1&&k<=15){build(id,tile,k);return}const n=nat[id];if(!n||!n.alive||tile<0||tile>=N||!land[tile])return;const t=own[tile];
   if(t===id)return;const send=Math.floor(n.troops*r/100);if(send<5)return;
   if(landReach(id,tile)){n.troops-=send;launch(id,t,send,tile%W,(tile/W)|0)}
   else if(launchBoat(id,tile,send))n.troops-=send}
@@ -546,15 +584,19 @@ const DF=()=>DIFFS[diff];
 // ---------- bots ----------
 function botBuild(b){
   if(--b.bcool>0)return;b.bcool=40+Math.floor(rng()*80);
-  if(DF().nukes&&b.b[5]>0&&b.gold>=KINDS[7].cost*2&&simTick>1800&&rng()<DF().nukeChance){let tgt=null;for(const o of nat)if(o.alive&&o.id!==b.id&&angry(b,o.id)&&(!tgt||o.tiles>tgt.tiles))tgt=o;
+  if(DF().nukes&&b.e[5]>0&&b.gold>=KINDS[7].cost*2&&simTick>1800&&rng()<DF().nukeChance){let tgt=null;for(const o of nat)if(o.alive&&o.id!==b.id&&angry(b,o.id)&&(!tgt||o.tiles>tgt.tiles))tgt=o;
     if(tgt&&borders[tgt.id].size){let idx=Math.floor(rng()*borders[tgt.id].size);for(const i of borders[tgt.id]){if(idx--<=0){build(b.id,i,7);break}}}return}
   if(b.tiles>2500&&b.b[12]===0&&rng()<.08&&b.gold>=costOf(b,12)*1.2){const arr=borders[b.id];let idx=Math.floor(rng()*arr.size),t=-1;for(const i of arr){if(idx--<=0){t=i;break}}
     if(t>=0){const x=t%W,y=(t/W)|0;for(let s2=0;s2<8;s2++){const xx=Math.max(0,Math.min(W-1,x+Math.round((rng()-.5)*56))),yy=Math.max(0,Math.min(H-1,y+Math.round((rng()-.5)*56))),i=yy*W+xx;if(canPlace(b.id,i)){build(b.id,i,12);return}}}}
-  if(b.b[12]>0&&b.b[13]<2&&rng()<.08&&b.gold>=costOf(b,13)*1.3){const ap=buildings.find(x=>!x.dead&&x.k===12&&own[x.t]===b.id);if(ap){build(b.id,ap.t,13);return}}
-  if(b.b[12]>0&&rng()<DF().nukeChance*2&&b.gold>=costOf(b,14)*1.5){let tgt=null;for(const o of nat)if(o.alive&&o.id!==b.id&&angry(b,o.id)&&(!tgt||o.tiles>tgt.tiles))tgt=o;
+  if(b.e[12]>0&&b.b[13]<2&&rng()<.08&&b.gold>=costOf(b,13)*1.3){const ap=buildings.find(x=>ready(x)&&x.k===12&&own[x.t]===b.id);if(ap){build(b.id,ap.t,13);return}}
+  if(b.e[12]>0&&rng()<DF().nukeChance*2&&b.gold>=costOf(b,14)*1.5){let tgt=null;for(const o of nat)if(o.alive&&o.id!==b.id&&angry(b,o.id)&&(!tgt||o.tiles>tgt.tiles))tgt=o;
     if(tgt&&borders[tgt.id].size){let idx=Math.floor(rng()*borders[tgt.id].size);for(const i of borders[tgt.id]){if(idx--<=0){build(b.id,i,14);break}}return}}
+  const myPort=buildings.find(x=>ready(x)&&x.k===8&&own[x.t]===b.id);
+  if(myPort&&b.b[15]<3&&rng()<.06&&b.gold>=costOf(b,15)*1.2){const px=myPort.w%W,py=(myPort.w/W)|0;
+    for(let t=0;t<20;t++){const x=px+Math.round((rng()-.5)*40),y=py+Math.round((rng()-.5)*40);if(x<0||y<0||x>=W||y>=H)continue;const i=y*W+x;if(rigOk(b.id,i)){build(b.id,i,15);return}}}
+  if(myPort&&b.b[6]+b.b[9]+b.b[10]<4&&rng()<.1){const nk2=rng()<.4?9:rng()<.75?6:10;if(b.gold>=costOf(b,nk2)*1.2){build(b.id,myPort.w,nk2);return}}
   const fleet=b.b[6]+b.b[9]+b.b[10],nk=b.b[8]===0||(b.b[8]<2&&rng()<.5)?8:(rng()<.4?9:rng()<.75?6:10);
-  if(b.coast>0&&(nk===8||fleet<4)&&rng()<.14&&b.gold>=costOf(b,nk)*1.2){const cx=Math.round(b.sx/Math.max(1,b.tiles)),cy=Math.round(b.sy/Math.max(1,b.tiles)),rr=Math.ceil(Math.sqrt(b.tiles)*1.2)+4;
+  if(b.coast>0&&nk===8&&rng()<.14&&b.gold>=costOf(b,nk)*1.2){const cx=Math.round(b.sx/Math.max(1,b.tiles)),cy=Math.round(b.sy/Math.max(1,b.tiles)),rr=Math.ceil(Math.sqrt(b.tiles)*1.2)+4;
     for(let t=0;t<60;t++){const x=cx+Math.round((rng()-.5)*2*rr),y=cy+Math.round((rng()-.5)*2*rr);if(x<0||y<0||x>=W||y>=H)continue;const i=y*W+x;if(shipSpot(b.id,i)>=0&&(nk!==8||canPlace(b.id,i))){build(b.id,i,nk);return}}}
   const r=rng(),k=b.b[5]===0&&b.tiles>3000&&r<.08?5:r<.38?1:r<.62?2:r<.82?3:4;if(b.gold<costOf(b,k)*1.1||!borders[b.id].size)return;
   const arr=borders[b.id];let idx=Math.floor(rng()*arr.size),t=-1;for(const i of arr){if(idx--<=0){t=i;break}}
@@ -589,14 +631,15 @@ function runTick(){
   simTick++;
   const list=pending.get(simTick);if(list){for(const [n,t,r,k] of list)applyInput(n,t,r,k|0);pending.delete(simTick)}
   recount();
-  for(const n of nat){if(!n.alive)continue;const m=cap(n);const bm=n.bot?DF():null;if(n.troops<m)n.troops+=(1+n.tiles*.012+n.b[3]*1.5)*(1-n.troops/m)*(bm?bm.regen:1);
-    n.gold+=(1+n.tiles*.005+n.b[1]*.3+n.b[2]*.8)*(bm?bm.gold:1)}
+  for(const n of nat){if(!n.alive)continue;const m=cap(n);const bm=n.bot?DF():null;if(n.troops<m)n.troops+=(1+n.tiles*.012+n.e[3]*1.5)*(1-n.troops/m)*(bm?bm.regen:1);
+    n.gold+=(1+n.tiles*.005+n.e[1]*.3+n.e[2]*.8+n.e[15]*3)*(bm?bm.gold:1)}
   for(const n of nat)if(n.alive&&n.bot)botThink(n);
   attacks=attacks.filter(stepAttack);
   if(simTick%CREEP_EVERY===0)creep();
   stepShips();
   stepTrade();
   stepAir();
+  stepRigs();
   stepBoats();
   stepMissiles();
   for(const n of nat)if(n.alive&&n.tiles===0)kill(n.id);
@@ -699,10 +742,12 @@ function drawShips(alpha){
     if(k>.55){ctx.fillStyle=`rgba(255,180,90,${(1-k)*2})`;ctx.beginPath();ctx.arc(x1,y1,(q.big?5:3)*(1+k),0,Math.PI*2);ctx.fill()}}
   // aircraft
   for(const q of planes){const px=q.px??q.x,py=q.py??q.y,fx=lerp(px,q.x,alpha),fy=lerp(py,q.y,alpha),x=ox+(fx+.5)*scale,y=oy+(fy+.5)*scale;if(x<-30||y<-30||x>vw+30||y>vh+30)continue;
-    const hd=Math.atan2(q.y-py,q.x-px)||0,c=nat[q.a].rgb,z=q.k===14?Math.max(12,Math.min(24,scale*3.6)):q.k===13?Math.max(10,Math.min(18,scale*2.8)):Math.max(9,Math.min(15,scale*2.3));
-    ctx.save();ctx.translate(x,y);ctx.rotate(hd);ctx.fillStyle=q.k===0?`rgb(${c[0]},${c[1]},${c[2]})`:'#4b565d';ctx.strokeStyle='#08141e';ctx.lineWidth=1.2;drawIcon(ctx,q.k===0?15:q.k,0,0,z);
-    if(q.k!==0){ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;ctx.fillRect(-z*.35,-z*.08,z*.5,z*.16)}else{ctx.fillStyle='#f2c14e';ctx.beginPath();ctx.arc(0,0,z*.12,0,Math.PI*2);ctx.fill()}
+    const hd=Math.atan2(q.y-py,q.x-px)||0,c=nat[q.a].rgb,z=q.k===14||q.k===16?Math.max(12,Math.min(24,scale*3.6)):q.k===13?Math.max(10,Math.min(18,scale*2.8)):Math.max(9,Math.min(15,scale*2.3));
+    ctx.save();ctx.translate(x,y);ctx.rotate(hd);ctx.fillStyle=q.k===0||q.k===16?`rgb(${c[0]},${c[1]},${c[2]})`:'#4b565d';ctx.strokeStyle='#08141e';ctx.lineWidth=1.2;drawIcon(ctx,q.k===0?15:q.k,0,0,z);
+    if(q.k!==0&&q.k!==16){ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;ctx.fillRect(-z*.35,-z*.08,z*.5,z*.16)}else{ctx.fillStyle='#f2c14e';ctx.beginPath();ctx.arc(0,0,z*.12,0,Math.PI*2);ctx.fill()}
     ctx.restore();
+    if(q.k===16){ctx.font=`600 ${Math.max(9,z*.6)}px "IBM Plex Mono", monospace`;ctx.textAlign='center';ctx.textBaseline='top';ctx.lineWidth=3;ctx.strokeStyle='rgba(8,20,30,.8)';ctx.fillStyle='#f1f5f6';ctx.strokeText(fmt(q.troops),x,y+z*.55);ctx.fillText(fmt(q.troops),x,y+z*.55)
+      if(q.a===P){ctx.strokeStyle='rgba(242,193,78,.45)';ctx.lineWidth=1.5;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ox+(q.tx+.5)*scale,oy+(q.ty+.5)*scale);ctx.stroke();ctx.setLineDash([])}}
     if(q.k===14&&!q.back){ctx.strokeStyle='rgba(232,112,90,.5)';ctx.setLineDash([3,5]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ox+(q.tx+.5)*scale,oy+(q.ty+.5)*scale);ctx.stroke();ctx.setLineDash([])}
     if(q.max&&q.hp<q.max){ctx.fillStyle='#08141e';ctx.fillRect(x-z/2,y-z*.8,z,3);ctx.fillStyle=q.hp>q.max*.4?'#7bd88f':'#e8705a';ctx.fillRect(x-z/2,y-z*.8,z*q.hp/q.max,3)}}
   // gold from your trade ships
@@ -722,10 +767,13 @@ function drawMissiles(alpha){
     ctx.strokeStyle=`rgba(232,112,90,${1-t})`;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,R*(.6+t*.9),0,Math.PI*2);ctx.stroke()}}
 function drawBuildings(){
   const s=Math.max(5,Math.min(16,scale*2.4));if(scale<1.2&&buildings.length>600)return;
-  for(const b of buildings){if(b.dead)continue;const o=own[b.t];if(o<0)continue;const x=ox+((b.t%W)+.5)*scale,y=oy+(((b.t/W)|0)+.5)*scale;
-    if(x<-20||y<-20||x>vw+20||y>vh+20)continue;const c=nat[o].rgb;
-    ctx.fillStyle=`rgb(${Math.min(255,c[0]*1.25)},${Math.min(255,c[1]*1.25)},${Math.min(255,c[2]*1.25)})`;ctx.strokeStyle='#08141e';ctx.lineWidth=Math.max(1,s/7);
-    drawIcon(ctx,b.k,x,y,s)}}
+  for(const b of buildings){if(b.dead)continue;const o=bOwner(b);if(o<0&&b.k!==15)continue;const x=ox+((b.t%W)+.5)*scale,y=oy+(((b.t/W)|0)+.5)*scale;
+    if(x<-20||y<-20||x>vw+20||y>vh+20)continue;const c=o>=0?nat[o].rgb:[150,156,160],z=b.k===15?s*1.2:s;
+    const building=b.done>simTick;ctx.globalAlpha=building?.5:1;
+    ctx.fillStyle=`rgb(${Math.min(255,c[0]*1.25)},${Math.min(255,c[1]*1.25)},${Math.min(255,c[2]*1.25)})`;ctx.strokeStyle='#08141e';ctx.lineWidth=Math.max(1,z/7);
+    drawIcon(ctx,b.k,x,y,z);ctx.globalAlpha=1;
+    if(building){const f=1-(b.done-simTick)/(BUILD_T[b.k]||1);ctx.strokeStyle='#08141e';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,z*.85,0,Math.PI*2);ctx.stroke();
+      ctx.strokeStyle='#f2c14e';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,z*.85,-Math.PI/2,-Math.PI/2+f*Math.PI*2);ctx.stroke()}}}
 function drawIcon(g,k,x,y,s){const h=s/2;g.beginPath();
   if(k===1){g.moveTo(x-h,y+h);g.lineTo(x-h,y-h*.2);g.lineTo(x,y-h);g.lineTo(x+h,y-h*.2);g.lineTo(x+h,y+h);g.closePath()}
   else if(k===2){g.arc(x,y,h,0,Math.PI*2)}
@@ -736,6 +784,9 @@ function drawIcon(g,k,x,y,s){const h=s/2;g.beginPath();
   else if(k===9){g.moveTo(x-h,y);g.lineTo(x+h,y-h*.1);g.lineTo(x+h*.6,y+h*.45);g.lineTo(x-h*.8,y+h*.45);g.closePath();g.rect(x-h*.2,y-h*.4,h*.4,h*.4)}
   else if(k===10){g.moveTo(x-h,y);g.lineTo(x+h,y);g.lineTo(x+h*.8,y+h*.6);g.lineTo(x-h*.8,y+h*.6);g.closePath();g.rect(x-h*.75,y-h*.4,h*.4,h*.4);g.rect(x+h*.3,y-h*.4,h*.4,h*.4);g.rect(x-h*.2,y-h*.75,h*.4,h*.75)}
   else if(k===11){for(let j=0;j<24;j++){const a=j*Math.PI/12,rr=j%2?h*.55:h;g.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr)}g.closePath();g.moveTo(x+h*.3,y);g.arc(x,y,h*.3,0,Math.PI*2)}
+  else if(k===15){g.rect(x-h*.8,y-h*.1,h*1.6,h*.35);g.moveTo(x-h*.6,y+h*.25);g.lineTo(x-h*.6,y+h);g.moveTo(x+h*.6,y+h*.25);g.lineTo(x+h*.6,y+h);
+    g.moveTo(x-h*.3,y-h*.1);g.lineTo(x,y-h);g.lineTo(x+h*.3,y-h*.1);g.closePath()}
+  else if(k===16){const w=.9;g.moveTo(x+h,y);g.lineTo(x+h*.2,y-h*.18);g.lineTo(x-h*.1,y-h*w);g.lineTo(x-h*.35,y-h*w);g.lineTo(x-h*.2,y-h*.18);g.lineTo(x-h*.75,y-h*.15);g.lineTo(x-h,y-h*.5);g.lineTo(x-h,y+h*.5);g.lineTo(x-h*.75,y+h*.15);g.lineTo(x-h*.2,y+h*.18);g.lineTo(x-h*.35,y+h*w);g.lineTo(x-h*.1,y+h*w);g.lineTo(x+h*.2,y+h*.18);g.closePath();g.moveTo(x+h*.15,y);g.arc(x,y,h*.15,0,Math.PI*2)}
   else if(k===12){g.rect(x-h,y+h*.2,h*2,h*.45);g.rect(x+h*.25,y-h,h*.45,h*1.2);g.rect(x+h*.05,y-h,h*.85,h*.35)}
   else if(k===13||k===14||k===15){const w=k===14?1.15:.9;g.moveTo(x+h,y);g.lineTo(x+h*.2,y-h*.18);g.lineTo(x-h*.1,y-h*w);g.lineTo(x-h*.35,y-h*w);g.lineTo(x-h*.2,y-h*.18);g.lineTo(x-h*.75,y-h*.15);g.lineTo(x-h,y-h*.5);g.lineTo(x-h,y+h*.5);g.lineTo(x-h*.75,y+h*.15);g.lineTo(x-h*.2,y+h*.18);g.lineTo(x-h*.35,y+h*w);g.lineTo(x-h*.1,y+h*w);g.lineTo(x+h*.2,y+h*.18);g.closePath()}
   else if(k===7){for(let j=0;j<16;j++){const a=j*Math.PI/8,rr=j%2?h*.45:h;g.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr)}g.closePath()}
@@ -752,6 +803,9 @@ function draw(){
   drawShips(alpha);
   drawMissiles(alpha);
   drawFronts();
+  if(dragK&&dragTile>=0){const x=ox+((dragTile%W)+.5)*scale,y=oy+(((dragTile/W)|0)+.5)*scale,okp=placeable(P,dragTile,dragK)&&nat[P].gold>=costOf(nat[P],dragK);
+    ctx.strokeStyle=okp?'#7bd88f':'#e8705a';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(x,y,Math.max(10,scale*4),0,Math.PI*2);ctx.stroke();
+    if(dragK===4){ctx.setLineDash([4,4]);ctx.beginPath();ctx.arc(x,y,FORT_R*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([])}}
   if(menuTile>=0){const x=ox+((menuTile%W)+.5)*scale,y=oy+(((menuTile/W)|0)+.5)*scale;ctx.strokeStyle='#f2c14e';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,Math.max(6,scale*2),0,Math.PI*2);ctx.stroke();
     if(menuHover===4||isBomb(menuHover)||menuHover===14){ctx.setLineDash([4,4]);ctx.strokeStyle=menuHover===4?'#f2c14e':'#e8705a';ctx.beginPath();ctx.arc(x,y,(isBomb(menuHover)?BOMB_R[menuHover]:menuHover===14?AIR.bomber.r:FORT_R)*scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([])}}
   ctx.textAlign='center';ctx.textBaseline='middle';
@@ -797,8 +851,12 @@ function updateUI(){
   $('sGold').textContent=fmt(me.gold);$('sTroops').textContent=fmt(me.troops);$('sCap').textContent=fmt(cap(me));
   $('sLand').textContent=(me.tiles/totalLand*100).toFixed(1)+'%';
   const fr=attacks.filter(a=>a.a===P);$('sFronts').textContent=fr.length?fr.length+' · '+fmt(fr.reduce((s,a)=>s+a.troops,0)):'0';
+  // build bar
+  $('bbar').hidden=phase!=='play';if(phase==='play'){if(!$('bbar').children.length)makeBuildBar();
+    for(const el of $('bbar').children){const k=+el.dataset.k,c=costOf(me,k),inProg=me.b[k]-me.e[k];
+      el.querySelector('b').innerHTML=me.e[k]+(inProg>0?`<em> +${inProg}</em>`:'');el.querySelector('small').textContent=fmt(c);el.classList.toggle('poor',me.gold<c)}}
   // troop bar: at home vs max, plus troops out fighting
-  const fight=attacks.reduce((t,a)=>a.a===P?t+a.troops:t,0)+boats.reduce((t,b)=>b.a===P?t+b.troops:t,0),cp=cap(me),tot=Math.max(cp,me.troops+fight);
+  const fight=attacks.reduce((t,a)=>a.a===P?t+a.troops:t,0)+boats.reduce((t,b)=>b.a===P?t+b.troops:t,0)+planes.reduce((t,q)=>q.k===16&&q.a===P?t+q.troops:t,0),cp=cap(me),tot=Math.max(cp,me.troops+fight);
   $('tbar').hidden=phase!=='play';$('tHome').textContent=fmt(me.troops);$('tCap').textContent=fmt(cp);$('tFight').textContent=fmt(fight);
   $('tHomeBar').style.width=(me.troops/tot*100).toFixed(2)+'%';$('tFightBar').style.width=(fight/tot*100).toFixed(2)+'%';
   $('tTrack').setAttribute('aria-label',`${fmt(me.troops)} of ${fmt(cp)} troops at home, ${fmt(fight)} fighting`);
@@ -806,6 +864,8 @@ function updateUI(){
   const nm=t=>t<0?'Unclaimed land':nat[t].name,rows=[];
   for(const a of attacks)if(a.a===P)rows.push(['out',nm(a.t),a.troops]);
   for(const b of boats)if(b.a===P)rows.push(['out','By sea → '+nm(own[b.path[b.path.length-1]]),b.troops]);
+  for(const q of planes)if(q.k===16&&q.a===P)rows.push(['out','By air → '+nm(own[q.dest]),q.troops]);
+  for(const q of planes)if(q.k===16&&q.a!==P&&own[q.dest]===P)rows.push(['in','Plane from '+nat[q.a].name,q.troops]);
   for(const a of attacks)if(a.t===P)rows.push(['in',nm(a.a),a.troops]);
   for(const b of boats)if(b.a!==P&&own[b.path[b.path.length-1]]===P)rows.push(['in','Boat from '+nat[b.a].name,b.troops]);
   const fp=$('fronts');
@@ -817,7 +877,7 @@ function updateUI(){
   const top=nat.filter(n=>n.alive).sort((a,b)=>b.tiles-a.tiles).slice(0,5);
   $('board').innerHTML=top.map(n=>`<li class="${n.id===P?'me':''}"><i style="background:rgb(${n.rgb})"></i>${esc(n.name)} ${(n.tiles/totalLand*100).toFixed(0)}%</li>`).join('');
 }
-function clearHUD(){$('tbar').hidden=true;$('fronts').hidden=true;['sGold','sTroops','sCap','sLand','sFronts'].forEach(id=>$(id).textContent='—');$('board').innerHTML=''}
+function clearHUD(){$('bbar').hidden=true;$('tbar').hidden=true;$('fronts').hidden=true;['sGold','sTroops','sCap','sLand','sFronts'].forEach(id=>$(id).textContent='—');$('board').innerHTML=''}
 let toastT;function toast(msg){const t=$('toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>t.hidden=true,2200)}
 function tileAt(e){const r=cv.getBoundingClientRect();const x=Math.floor((e.clientX-r.left-ox)/scale),y=Math.floor((e.clientY-r.top-oy)/scale);
   return(x<0||y<0||x>=W||y>=H)?-1:y*W+x}
@@ -851,13 +911,16 @@ function tap(e){
     if(!spawnable(i))return toast("That rock is too small. Pick a bigger island.");
     claimDisc(i%W,(i/W)|0,spawnR(),P);placeRest();$('banner').hidden=true;phase='play';running=true;updateUI();return}
   if(phase!=='play'||!nat[P].alive)return;
-  if(!land[i])return toast("Tap land across the water to send a boat there.");
+  if(!land[i])return toast("Right-click (or press and hold) the sea to build ships and oil rigs.");
   const t=own[i];if(t===P)return;
   if(nat[P].troops*ratio()/100<5)return toast("Not enough troops. Wait for them to regroup.");
   if(!landReach(P,i)){
-    if(nat[P].coast<=0)return toast("You need land on the coast to launch boats.");
+    const seaOk=nat[P].coast>0&&boats.filter(b=>b.a===P).length<MAXBOATS&&boatPath(P,i);
+    if(!seaOk&&nat[P].e[12]>0){if(planes.filter(q=>q.a===P&&q.k===16).length>=MAX_AIRLIFT)return toast(`You already have ${MAX_AIRLIFT} troop planes in the air.`);
+      toast(mode==='client'?"Troop plane order sent":"Troop plane launched");return order(i,ratio(),16)}
+    if(nat[P].coast<=0)return toast("You need land on the coast (or an airport) to reach there.");
     if(boats.filter(b=>b.a===P).length>=MAXBOATS)return toast(`You already have ${MAXBOATS} boats at sea. Wait for one to land.`);
-    if(!boatPath(P,i))return toast("No sea route to there.");
+    if(!seaOk)return toast("No sea route to there. An airport would let you fly troops in.");
     toast(mode==='client'?"Boat order sent":"Boat launched")}
   order(i,ratio());
 }
@@ -867,28 +930,52 @@ cv.addEventListener('pointermove',e=>{const tip=$('tip');if(ptrs.size){tip.hidde
   const r=cv.getBoundingClientRect();tip.style.left=Math.max(4,Math.min(e.clientX-r.left+14,r.width-tip.offsetWidth-8))+'px';tip.style.top=(e.clientY-r.top+14)+'px';tip.hidden=false});
 cv.addEventListener('pointerleave',()=>$('tip').hidden=true);
 
+// ---------- build bar: drag an icon onto the map to place that building ----------
+const BAR_KINDS=[1,2,3,4,5,8,12,15];let dragK=0,dragTile=-1;
+function makeBuildBar(){const bar=$('bbar');bar.innerHTML='';
+  for(const k of BAR_KINDS){const el=document.createElement('button');el.type='button';el.className='bslot';el.dataset.k=k;el.title=`${KINDS[k].name}: ${KINDS[k].desc}. Drag onto the map to build.`;
+    el.setAttribute('aria-label',KINDS[k].name+'. Drag onto the map to build.');
+    const ic=document.createElement('canvas');ic.width=ic.height=52;const g=ic.getContext('2d');g.scale(2,2);g.fillStyle='#f2c14e';g.strokeStyle='#08141e';g.lineWidth=1.6;drawIcon(g,k,13,13,18);
+    const t=document.createElement('span');t.className='bn';t.innerHTML='<b>0</b><small>—</small>';el.append(ic,t);
+    el.addEventListener('pointerdown',e=>startDrag(e,el,k));bar.append(el)}}
+function overMap(e){const r=cv.getBoundingClientRect();return e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom}
+function startDrag(e,el,k){if(phase!=='play'||!nat[P]?.alive)return;e.preventDefault();closeBuild();el.setPointerCapture(e.pointerId);dragK=k;dragTile=-1;
+  const gh=document.createElement('canvas');gh.id='dragGhost';gh.width=gh.height=68;const g=gh.getContext('2d');g.scale(2,2);g.fillStyle='#f2c14e';g.strokeStyle='#08141e';g.lineWidth=2;drawIcon(g,k,17,17,24);
+  document.body.append(gh);let moved=false;const sx=e.clientX,sy=e.clientY;
+  const mv=ev=>{gh.style.left=ev.clientX+'px';gh.style.top=ev.clientY+'px';if(Math.hypot(ev.clientX-sx,ev.clientY-sy)>5)moved=true;dragTile=overMap(ev)?tileAt(ev):-1};mv(e);
+  const up=ev=>{el.removeEventListener('pointermove',mv);el.removeEventListener('pointerup',up);el.removeEventListener('pointercancel',up);gh.remove();
+    const t=ev.type==='pointerup'&&overMap(ev)?tileAt(ev):-1,kk=dragK;dragK=0;dragTile=-1;
+    if(!moved)return toast(`Drag the ${KINDS[kk].name.toLowerCase()} onto ${kk===15?'the sea near your land':'your land'} to build it.`);
+    if(t<0)return;const me=nat[P];
+    if(me.gold<costOf(me,kk))return toast(`Not enough gold. A ${KINDS[kk].name.toLowerCase()} costs ${fmt(costOf(me,kk))}.`);
+    if(!placeable(P,t,kk))return toast(kk===15?`Oil rigs go on open water within ${OIL_R} tiles of your land, away from other buildings.`:kk===8?'Ports go on your land next to the sea, away from other buildings.':'Build on your own land, at least 8 tiles from other buildings.');
+    order(t,0,kk);toast(`${KINDS[kk].name} started. It takes ${Math.round(BUILD_T[kk]/10)} s to build.`)};
+  el.addEventListener('pointermove',mv);el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up)}
+
 // ---------- build menu ----------
 let menuTile=-1,menuHover=0;
 function openBuild(cx0,cy0){
   if(phase!=='play'||!nat[P]?.alive)return;const i=tileAt({clientX:cx0,clientY:cy0});
-  if(i<0)return;const me=nat[P],mine=land[i]&&own[i]===P;
-  if(!mine&&me.b[5]===0&&me.b[12]===0)return toast("Build a Missile Silo or an Airport on your land to strike. Right-click your own land to build.");
+  if(i<0)return;const me=nat[P],mine=land[i]&&own[i]===P,sea=!land[i];
+  if(!mine&&!sea&&me.e[5]===0&&me.e[12]===0)return toast("Build a Missile Silo or an Airport on your land to strike. Right-click your own land to build.");
   menuTile=i;const m=$('bmenu'),ok=mine&&canPlace(P,i);m.innerHTML='';
-  const head=document.createElement('div');head.className='bhead';head.innerHTML=`<span>${mine?'Build':'Strike'}</span><b>${fmt(me.gold)} gold</b>`;m.append(head);
+  const head=document.createElement('div');head.className='bhead';head.innerHTML=`<span>${mine?'Build':sea?'Sea':'Strike'}</span><b>${fmt(me.gold)} gold</b>`;m.append(head);
   const note=t=>{const p=document.createElement('p');p.className='bnote';p.textContent=t;m.append(p)};
   if(mine&&!ok)note('Too close to another building for new buildings. Pick a spot at least 8 tiles away.');
-  const coastal=mine&&shipSpot(P,i)>=0,hasPort=!!nearestPort(P,i),hasAir=me.b[12]>0,hasSilo=me.b[5]>0,list=mine?[1,2,3,4,5,12].concat(coastal?[8]:[],[9,6,10,13]):[14,7,11];
+  const coastal=mine&&shipSpot(P,i)>=0,hasPort=!!nearestPort(P,i),hasAir=me.e[12]>0,hasSilo=me.e[5]>0,rig=sea&&rigOk(P,i),
+    list=mine?[1,2,3,4,5,12].concat(coastal?[8]:[],[13]):sea?[9,6,10,15]:[16,14,7,11];
   if(mine&&!coastal)note('Right-click your land near the sea to build a port.');
-  if(mine&&!hasPort)note('Warships need a port. Build one first.');
-  if(mine&&!hasAir)note('Fighters need an airport.');
-  if(!mine&&!hasAir)note('Bomber strikes need an airport.');
-  if(!mine&&!hasSilo)note('Bombs need a missile silo.');
+  if(mine&&!hasAir)note('Fighters need a finished airport.');
+  if(sea&&!hasPort)note('Warships need a finished port. They sail out from it to this spot.');
+  if(sea&&!rig)note(`Oil rigs go on open water within ${OIL_R} tiles of your land, away from other buildings.`);
+  if(!mine&&!sea&&!hasAir)note('Troop planes and bomber strikes need a finished airport.');
+  if(!mine&&!sea&&!hasSilo)note('Bombs need a finished missile silo.');
   for(const k of list){const K=KINDS[k],c=costOf(me,k),b=document.createElement('button');b.type='button';b.setAttribute('role','menuitem');
-    b.disabled=((k<=5||k===8||k===12)&&!ok)||(isWar(k)&&!hasPort)||((k===13||k===14)&&!hasAir)||(isBomb(k)&&!hasSilo)||(k===14&&!land[i])||me.gold<c;const ic=document.createElement('canvas');ic.width=ic.height=28;const g=ic.getContext('2d');g.fillStyle=isBomb(k)||k===14?'#e8705a':'#f2c14e';g.strokeStyle='#08141e';g.lineWidth=2;drawIcon(g,k,14,14,18);
+    b.disabled=((k<=5||k===8||k===12)&&!ok)||(isWar(k)&&!hasPort)||((k===13||k===14||k===16)&&!hasAir)||(isBomb(k)&&!hasSilo)||(k===15&&!rig)||me.gold<c;const ic=document.createElement('canvas');ic.width=ic.height=28;const g=ic.getContext('2d');g.fillStyle=isBomb(k)||k===14?'#e8705a':'#f2c14e';if(k===16&&nat[P].e[12]>0&&planes.filter(q=>q.a===P&&q.k===16).length>=MAX_AIRLIFT)b.disabled=true;g.strokeStyle='#08141e';g.lineWidth=2;drawIcon(g,k,14,14,18);
     const tx=document.createElement('span');tx.className='bt';const nm=document.createElement('b');nm.textContent=K.name;const ds=document.createElement('small');ds.textContent=K.desc;tx.append(nm,ds);
-    const pr=document.createElement('span');pr.className='bp';pr.textContent=fmt(c);
+    const pr=document.createElement('span');pr.className='bp';pr.textContent=k===16?ratio()+'% troops':fmt(c);
     b.append(ic,tx,pr);b.onmouseenter=b.onfocus=()=>menuHover=k;b.onmouseleave=()=>menuHover=0;
-    b.onclick=()=>{order(menuTile,0,k);closeBuild()};m.append(b)}
+    b.onclick=()=>{order(menuTile,k===16?ratio():0,k);if(BUILD_T[k])toast(`${K.name} started. It takes ${Math.round(BUILD_T[k]/10)} s to build.`);closeBuild()};m.append(b)}
   m.hidden=false;const r=$('stage').getBoundingClientRect(),mw=m.offsetWidth,mh=m.offsetHeight;
   m.style.left=Math.max(8,Math.min(cx0-r.left+8,r.width-mw-8))+'px';m.style.top=Math.max(8,Math.min(cy0-r.top+8,r.height-mh-8))+'px';
   const f=m.querySelector('button:not(:disabled)');if(f)f.focus({preventScroll:true})}
@@ -911,10 +998,65 @@ try{nick=localStorage.getItem('claimline-nick')||''}catch{}
 if(!nick)nick='Captain '+(100+Math.floor(Math.random()*900));
 function saveNick(v){nick=(v||'').trim().slice(0,16)||nick;try{localStorage.setItem('claimline-nick',nick)}catch{}}
 
+// ---------- transports ----------
+// 'claude': the claude.ai live room. 'p2p': direct browser-to-browser links via PeerJS (works on any website, no accounts).
+// 'local': same-device test link over BroadcastChannel (open two tabs with #local).
+let net='none';
+// Both p2p and local links expose the same small shape the game already uses: presence(patch), onPeers(fn), leave().
+function linkGame(kind,code,role){return new Promise((resolve,reject)=>{
+  let myId='',hostId='',closed=false;const myPres={},others=new Map(),subs=new Set();
+  const peersList=()=>[{peer:myId,sameTab:true,isMe:true,kind:'viewer',presence:{...myPres}},...[...others].map(([id,p])=>({peer:id,sameTab:false,isMe:false,kind:'viewer',presence:p}))];
+  const emit=()=>{const peers=peersList();for(const f of subs)try{f({peers,joined:[],left:[],updated:[]})}catch(e){console.error(e)}};
+  const clean=p=>JSON.parse(JSON.stringify(p||{}));
+  let sendAll=()=>{},sendHost=()=>{},destroy=()=>{};
+  const api={presence(patch){for(const k in patch){if(patch[k]===null)delete myPres[k];else myPres[k]=patch[k]}
+      if(role==='host')sendAll({t:'p',p:myPres});else sendHost({t:'p',p:myPres});return Promise.resolve()},
+    onPeers(fn){subs.add(fn);setTimeout(()=>{if(subs.has(fn))fn({peers:peersList(),joined:[],left:[],updated:[]})},0);return()=>subs.delete(fn)},
+    peers:peersList,leave(){if(!closed){closed=true;try{destroy()}catch{}}return Promise.resolve()}};
+  if(kind==='local'){
+    const ch=new BroadcastChannel('claimline-'+code);myId='L'+Math.random().toString(36).slice(2,10);
+    const post=m=>{try{ch.postMessage({...m,from:myId})}catch{}};
+    sendAll=m=>post(m);sendHost=m=>post({...m,to:'host'});
+    ch.onmessage=ev=>{const m=ev.data;if(!m||m.from===myId||closed)return;
+      if(role==='host'){if(m.to!=='host')return;if(m.t==='bye'){others.delete(m.from);emit();return}if(m.t==='p'){others.set(m.from,clean(m.p));emit()}if(m.t==='hi')sendAll({t:'p',p:myPres})}
+      else{if(m.role!=='host')return;if(m.t==='bye'){others.clear();emit();return}if(m.t==='p'){hostId=m.from;others.clear();others.set(m.from,clean(m.p));emit()}}};
+    const rolePost=post;sendAll=m=>rolePost({...m,role:'host'});
+    destroy=()=>{post(role==='host'?{t:'bye',role:'host'}:{t:'bye',to:'host'});ch.close()};
+    if(role==='client')post({t:'hi',to:'host'});
+    resolve(api);return}
+  // p2p via PeerJS
+  if(!window.Peer)return reject(new Error('unavailable'));
+  const roomId='claimline-v1-'+code;
+  if(role==='host'){
+    const peer=new window.Peer(roomId,{debug:0});const conns=new Map();
+    sendAll=m=>{for(const c of conns.values())if(c.open)try{c.send(m)}catch{}};
+    destroy=()=>{for(const c of conns.values())try{c.close()}catch{}peer.destroy()};
+    peer.on('open',id=>{myId=id;resolve(api)});
+    peer.on('error',e=>{if(!myId)reject(e)});
+    peer.on('disconnected',()=>{if(!closed)try{peer.reconnect()}catch{}});
+    peer.on('connection',c=>{c.on('open',()=>{conns.set(c.peer,c);try{c.send({t:'p',p:myPres})}catch{}});
+      c.on('data',m=>{if(m&&m.t==='p'&&typeof m.p==='object'){others.set(c.peer,clean(m.p));emit()}});
+      c.on('close',()=>{conns.delete(c.peer);others.delete(c.peer);emit()});c.on('error',()=>{})})}
+  else{
+    const peer=new window.Peer({debug:0});let conn=null;
+    sendHost=m=>{if(conn&&conn.open)try{conn.send(m)}catch{}};
+    destroy=()=>{try{conn&&conn.close()}catch{}peer.destroy()};
+    const fail=e=>{if(!conn||!conn.open){try{peer.destroy()}catch{}reject(e)}};
+    peer.on('error',e=>fail(e));
+    peer.on('open',id=>{myId=id;conn=peer.connect(roomId,{reliable:true,serialization:'json'});
+      const to=setTimeout(()=>fail(new Error('timeout')),9000);
+      conn.on('open',()=>{clearTimeout(to);hostId=roomId;sendHost({t:'p',p:myPres});resolve(api)});
+      conn.on('data',m=>{if(m&&m.t==='p'&&typeof m.p==='object'){others.clear();others.set(roomId,clean(m.p));emit()}});
+      conn.on('close',()=>{others.clear();emit()});conn.on('error',()=>{})})}
+})}
+function openGame(code,role){
+  if(net==='claude')return roomApi.join('cl-'+code);
+  return linkGame(net,code,role)}
 const usePromise=window.claude?.use?window.claude.use('room'):Promise.resolve(null);
-usePromise.then(r=>{roomApi=r;roomState=r?'ok':'none';
+usePromise.then(r=>{roomApi=r;
+  net=r?'claude':location.hash==='#local'&&window.BroadcastChannel?'local':window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';
   if(r)r.onPeers(()=>{if(screen==='online')renderGames()},()=>{});
-  if(screen==='online')renderOnline();if(screen==='host')renderHost()}).catch(()=>{roomState='none';if(screen==='online')renderOnline();if(screen==='host')renderHost()});
+  if(screen==='online')renderOnline();if(screen==='host')renderHost()}).catch(()=>{net=window.Peer?'p2p':'none';roomState=net==='none'?'none':'ok';if(screen==='online')renderOnline();if(screen==='host')renderHost()});
 
 function checksum(){let c=0;for(let i=0;i<N;i++)c=(Math.imul(c,31)+own[i]+2)|0;return c}
 function recordChecksum(){if(mode==='solo')return;const c=checksum();
@@ -922,30 +1064,31 @@ function recordChecksum(){if(mode==='solo')return;const c=checksum();
 function schedule(n,tile,r,k=0){H_.inputId++;const e=[H_.inputId,simTick+2,n,tile,r,k];H_.log.push(e);if(H_.log.length>40)H_.log.shift();addPending(e[1],n,tile,r,k)}
 function publishHost(){if(!game||!H_)return;
   game.presence({n:nick,g:{phase:H_.phase,diff,map:H_.map,type:H_.type,seed:H_.seed,bots:H_.bots,players:H_.players,tick:simTick,log:H_.log,ck:H_.ck}}).catch(()=>{})}
-function newCode(){const a='abcdefghjkmnpqrstuvwxyz23456789';let s='';for(let i=0;i<4;i++)s+=a[Math.floor(Math.random()*a.length)];return s}
+function newCode(){const a='abcdefghjkmnpqrstuvwxyz23456789';let s='';for(let i=0;i<5;i++)s+=a[Math.floor(Math.random()*a.length)];return s}
 
 async function hostGame(){
-  if(!roomApi)return;const code=newCode();
-  try{game=await roomApi.join('cl-'+code)}catch(e){return toast("Couldn't open a game room. Try again.")}
+  if(roomState!=='ok')return;let code='';
+  toast('Opening a game room…');
+  for(let t=0;t<3&&!game;t++){code=newCode();try{game=await openGame(code,'host')}catch(e){game=null;if(t===2)return toast("Couldn't open a game room. Check your connection and try again.")}}
   mode='host';H_={code,phase:'lobby',map:selectedMap,type:'pangaea',seed:(Math.random()*1e6)|0,bots:botCount,players:[{p:'host',n:nick}],log:[],inputId:0,lastSeq:{},ck:null};
   unsubs.push(game.onPeers(onGamePeers,()=>{}));
-  roomApi.presence({host:{code,n:nick,c:1}}).catch(()=>{});
+  if(net==='claude')roomApi.presence({host:{code,n:nick,c:1}}).catch(()=>{});
   publishHost();renderRoomLobby();
 }
 async function joinGame(code){
   code=String(code||'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,8);if(!code)return toast("Enter a game code.");
-  if(!roomApi)return;
-  try{game=await roomApi.join('cl-'+code)}catch(e){return toast("Couldn't join that game.")}
+  if(roomState!=='ok')return;toast('Connecting…');
+  try{game=await openGame(code,'client')}catch(e){game=null;return toast(net==='p2p'?"No game found with that code. Check it and try again.":"Couldn't join that game.")}
   mode='client';clientCode=code;myActs=[];mySeq=0;hostTick=0;maxSeenId=0;ckLocal=new Map();desynced=false;hostPeer=null;
   game.presence({n:nick,acts:[]}).catch(()=>{});
   unsubs.push(game.onPeers(onGamePeers,()=>{}));
   renderWaiting(code);
-  clearTimeout(joinTimer);joinTimer=setTimeout(()=>{if(mode==='client'&&!hostPeer){leaveOnline();showMenu();toast("No game found with that code.")}},7000);
+  clearTimeout(joinTimer);joinTimer=setTimeout(()=>{if(mode==='client'&&!hostPeer){leaveOnline();showMenu();toast("No game found with that code.")}},10000);
 }
 function leaveOnline(){
   unsubs.forEach(u=>{try{u()}catch{}});unsubs=[];
   if(game){game.leave().catch(()=>{});game=null}
-  if(mode==='host'&&roomApi)roomApi.presence({host:null}).catch(()=>{});
+  if(mode==='host'&&net==='claude')roomApi.presence({host:null}).catch(()=>{});
   mode='solo';H_=null;hostPeer=null;running=false;clearTimeout(joinTimer);
 }
 
@@ -956,12 +1099,12 @@ function onGamePeers(ch){
       const others=peers.filter(p=>!p.sameTab&&p.kind==='viewer'&&typeof p.presence?.n==='string'&&!p.presence.g)
         .sort((a,b)=>a.peer<b.peer?-1:1).slice(0,7);
       H_.players=[{p:myPeer||'host',n:nick},...others.map(p=>({p:p.peer,n:String(p.presence.n).slice(0,16)}))];
-      roomApi.presence({host:{code:H_.code,n:nick,c:H_.players.length}}).catch(()=>{});
+      if(net==='claude')roomApi.presence({host:{code:H_.code,n:nick,c:H_.players.length}}).catch(()=>{});
       publishHost();renderRoomLobby();
     }else{
       for(const p of peers){const idx=H_.players.findIndex(x=>x.p===p.peer);if(idx<1)continue;
         const acts=p.presence?.acts;if(!Array.isArray(acts))continue;
-        for(const a of acts){if(!Array.isArray(a))continue;const [s,tile,r,kk]=a;const k=Number.isInteger(kk)&&kk>=0&&kk<=14?kk:0;
+        for(const a of acts){if(!Array.isArray(a))continue;const [s,tile,r,kk]=a;const k=Number.isInteger(kk)&&kk>=0&&kk<=16?kk:0;
           if(!Number.isInteger(s)||s<=(H_.lastSeq[p.peer]||0))continue;H_.lastSeq[p.peer]=s;
           if(Number.isInteger(tile)&&tile>=0&&tile<N&&Number.isFinite(r))schedule(idx,tile,Math.max(5,Math.min(100,Math.round(r))),k)}}
     }
@@ -996,7 +1139,7 @@ function startOnline(seedV,type,names,bots,me){
 }
 function hostStart(){
   H_.phase='play';H_.bots=botCount;const rm=resolveMap(H_.map);H_.seed=rm.seed;H_.type=rm.type;
-  roomApi.presence({host:null}).catch(()=>{});
+  if(net==='claude')roomApi.presence({host:null}).catch(()=>{});
   startOnline(H_.seed,H_.type,H_.players.map(p=>p.n),H_.bots,0);publishHost();
 }
 
@@ -1033,7 +1176,8 @@ function showMenu(){
   </div>
   <ul class="how"><li>Your realm slowly settles empty land around it on its own. Troops regrow over time, and more land means a bigger army.</li>
   <li>Tap land next to your border to send part of your troops there. Tap land across the water to send them by boat.</li>
-  <li>You earn gold over time. Right-click your land (or press and hold) to build. Ports send trade ships and launch warships; airports send trade planes and launch fighters. Right-click enemy land for bomber strikes (airport) or bombs (silo).</li>
+  <li>You earn gold over time. Drag a building from the bottom bar onto your land, or right-click (press and hold) your land. Buildings take a few seconds to finish.</li>
+  <li>Right-click the sea to build warships (needs a port) or oil rigs. Right-click enemy land for troop planes and bomber strikes (airport) or bombs (silo).</li>
   <li>Hold 70% of the land, or be the last realm standing.</li></ul>`);
   $('mSolo').onclick=showSolo;$('mHost').onclick=showHost;$('mJoin').onclick=showOnline;
 }
@@ -1056,7 +1200,7 @@ function showSolo(){
     $('overlay').hidden=true;phase='spawn';screen='game';$('banner').hidden=false;$('exitBtn').hidden=false;$('modeTag').hidden=false;$('modeTag').textContent='SOLO · '+DF().name.toUpperCase()};
 }
 function showOnline(){screen='online';renderOnline()}
-function roomNote(){return roomState==='pending'?`<p class="note">Connecting…</p>`:roomState==='none'?`<p class="note">Online play isn't available in this view. Open the page while signed in to claude.ai, and make sure it has been shared with the people you want to play.</p>`:''}
+function roomNote(){return roomState==='pending'?`<p class="note">Connecting…</p>`:roomState==='none'?`<p class="note">Online play couldn't start here. Check your internet connection and reload the page.</p>`:''}
 function showHost(){screen='host';renderHost()}
 function renderHost(){
   if(screen!=='host')return;const ok=roomState==='ok';
@@ -1075,7 +1219,7 @@ function renderOnline(){
   ${roomNote()}
   <div class="field"><h2>Open games</h2><ul class="list" id="games"></ul></div>
   <div class="field"><label class="k" for="code">Join with a code</label>
-  <div class="row"><input type="text" id="code" maxlength="8" placeholder="e.g. k7qm" autocomplete="off"><button id="joincode" ${ok?'':'disabled'}>Join</button></div></div>
+  <div class="row"><input type="text" id="code" maxlength="8" placeholder="e.g. k7qm2" autocomplete="off"><button id="joincode" ${ok?'':'disabled'}>Join</button></div></div>
   <button class="link" id="back">← Main menu</button>`);
   $('nick').onchange=e=>saveNick(e.target.value);
   $('joincode').onclick=()=>{saveNick($('nick').value);joinGame($('code').value)};
@@ -1085,6 +1229,7 @@ function renderOnline(){
 }
 function renderGames(){
   const ul=$('games');if(!ul)return;ul.innerHTML='';
+  if(net!=='claude'){const li=document.createElement('li');li.className='empty';li.textContent='Ask the host for their game code and enter it below.';ul.append(li);return}
   const hosts=roomApi?roomApi.peers().filter(p=>!p.sameTab&&p.presence?.host&&typeof p.presence.host.code==='string'):[];
   if(!hosts.length){const li=document.createElement('li');li.className='empty';li.textContent='No open games right now. Ask a friend for their code, or host your own.';ul.append(li);return}
   for(const h of hosts.slice(0,8)){const g=h.presence.host;const li=document.createElement('li');
@@ -1102,7 +1247,7 @@ function playerList(players,hostLabel){
 function renderRoomLobby(){
   if(mode!=='host'||H_.phase!=='lobby')return;screen='roomlobby';
   showCard(`<h1>Game <span class="code">${esc(H_.code)}</span></h1>
-  <p>Friends tap Join on the main menu, then pick your game from the list or enter this code.</p>
+  <p>Friends tap Join on the main menu and enter this code${net==='claude'?' (or pick your game from the list)':''}.</p>
   <div class="field"><h2>Players · ${H_.players.length}/8</h2><div id="plist"></div></div>
   <div class="field"><h2>Map</h2><div id="maplist"></div></div>
   ${diffPicker()}
