@@ -82,6 +82,12 @@ footer.bar{border-top-width:1px}
 #board li{display:flex;align-items:center;gap:5px;white-space:nowrap}
 #board i{width:10px;height:10px;border-radius:2px;display:inline-block}
 #board li.me{color:var(--gold)}
+.credit{position:absolute;right:max(14px,env(safe-area-inset-right,0px));bottom:14px;z-index:6;display:flex;flex-direction:column;align-items:flex-end;gap:1px;text-align:right}
+.credit span{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.credit a{font-weight:800;font-size:20px;letter-spacing:.04em;color:var(--gold);text-decoration:none;border-bottom:2px solid transparent}
+.credit a:hover,.credit a:focus-visible{border-bottom-color:var(--gold)}
+.credit-in{display:none}
+@media (max-width:520px){.credit:not(.credit-in){display:none!important}.credit-in{display:flex;position:static;align-items:center;justify-content:center;flex-direction:column;padding-top:4px}}
 .tutp{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:4;width:min(380px,calc(100% - 140px));background:var(--panel);border:1px solid var(--gold);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
 @media (min-width:521px){#stage:has(#tut:not([hidden])) #toast{top:auto;bottom:64px}}
 .tutp b{font-size:18px;letter-spacing:.02em}
@@ -198,6 +204,7 @@ button:not(:disabled):hover{filter:brightness(1.12)}
     <div id="fronts" class="fronts" aria-live="off" hidden></div>
     <div id="reqs" class="reqs" aria-live="polite" hidden></div>
     <div id="tut" class="tutp" aria-live="polite" hidden></div>
+    <div id="credit" class="credit" hidden><span>Made by:</span><a href="https://www.youtube.com/@Ghost-Krew" target="_blank" rel="noopener">GhostKrew</a></div>
     <div id="banner" hidden>Tap land to make landfall · drag to pan</div>
     <div id="overlay"><div class="card" id="card"></div></div>
   </main>
@@ -1389,7 +1396,7 @@ function botSlider(min,label){const v=Math.max(min,botCount);
 function wireBots(onSet){const el=$('bots');const f=()=>{botCount=+el.value;$('botsV').textContent=el.value;onSet&&onSet()};el.oninput=f;botCount=+el.value}
 function previewMap(id){const m=resolveMap(id);setup(m.seed,m.type,['You'],0);return m}
 let screen='menu';
-function showCard(html){$('overlay').hidden=false;$('card').innerHTML=html}
+function showCard(html){$('overlay').hidden=false;$('card').innerHTML=html;$('credit').hidden=true}
 $('exitBtn').onclick=()=>{
   if(phase==='over'||!$('overlay').hidden&&screen==='exit')return;
   closeBuild();const wasRunning=running,solo=mode==='solo';if(solo)running=false;screen='exit';
@@ -1418,7 +1425,9 @@ function showMenu(){
   <li>Right-click another realm to propose an alliance. Allies can’t attack each other, can send each other gold and troops, and earn more from trade.</li>
   <li>Hold 70% of the land, or be the last realm (or alliance) standing.</li></ul>
   <button class="tutbtn" id="mTut">Play the tutorial</button>
-  <button class="link" id="mGuide">Or read the how-to-play guide</button>`);
+  <button class="link" id="mGuide">Or read the how-to-play guide</button>
+  <div class="credit credit-in"><span>Made by:</span><a href="https://www.youtube.com/@Ghost-Krew" target="_blank" rel="noopener">GhostKrew</a></div>`);
+  $('credit').hidden=false;
   $('mSolo').onclick=showSolo;$('mHost').onclick=showHost;$('mJoin').onclick=showOnline;$('mTut').onclick=startTutorial;$('mGuide').onclick=()=>showTutorial(0);
 }
 // ---------- playable tutorial ----------
@@ -1435,6 +1444,7 @@ const TSTEPS=[
  {t:'Make an ally',d:'Right-click a rival’s land and choose Propose alliance. Allies can’t attack each other and earn more from trade.',ok:()=>Object.keys(nat[P].allies).length>0},
  {t:'Send a gift',d:'Right-click your new ally and choose Send gold or Send troops.',ok:e=>e.some(x=>x.k===24||x.k===25)}];
 function startTutorial(){
+  $('credit').hidden=true;
   mode='solo';selectedMap='twin';const m=resolveMap('twin');setup(m.seed,m.type,['You'],0);P=0;
   for(let b=0;b<4;b++)addBot(b);placeRest(P);shownDead=false;
   tut={i:0,ev:[],mark:0,crossed:false};
