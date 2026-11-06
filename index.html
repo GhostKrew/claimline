@@ -1,4 +1,12 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="Frontwake: a real-time territory conquest game you can play solo against bots or online with friends.">
+<style>*,*::before,*::after{box-sizing:border-box}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
 <title>Frontwake</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -52,6 +60,7 @@ footer.bar{border-top-width:1px}
 .bhead{display:flex;justify-content:space-between;align-items:baseline;padding:4px 6px 6px;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 .bhead b{font-family:var(--f-data);color:var(--gold);letter-spacing:0;font-size:14px}
 .bnote{margin:2px 6px;font-size:13px;color:var(--danger)}
+.bmenu button.upg{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 10%,transparent)}
 .bmenu button{display:flex;align-items:center;gap:10px;text-align:left;text-transform:none;letter-spacing:0;font-weight:500;padding:6px 8px;border-color:transparent;background:transparent}
 .bmenu button:not(:disabled):hover,.bmenu button:focus-visible{background:var(--sea);border-color:var(--line);filter:none}
 .bmenu canvas{flex:none;width:28px;height:28px}
@@ -203,7 +212,24 @@ button:not(:disabled):hover{filter:brightness(1.12)}
   </footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- PeerJS: uses a copy next to this page if you upload one (peerjs.min.js), otherwise the public CDN -->
+<script src="peerjs.min.js"></script>
+<!-- Online play through Firebase (free, Google-run). Paste your Firebase web config below to turn it on.
+     Leave it empty and the game uses PeerJS instead. Setup steps are in the README. -->
+<script>
+window.CLAIMLINE_FIREBASE = {
+  apiKey: "AIzaSyCj9HO13WFehle0xAHpVkoZ25055RDZdlE",
+  authDomain: "claimline-d8b8d.firebaseapp.com",
+  databaseURL: "https://claimline-d8b8d-default-rtdb.firebaseio.com",
+  projectId: "claimline-d8b8d",
+  storageBucket: "claimline-d8b8d.firebasestorage.app",
+  messagingSenderId: "349030330541",
+  appId: "1:349030330541:web:40758ba05acc3b17715624"
+};
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>if(!window.Peer)document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <script>
 (()=>{
 const W=1600,H=1000,N=W*H;
@@ -317,26 +343,36 @@ const NAMES=["Vessaly","Orrin Reach","Kadmar","Thule Marches","Ashgrove","Brenmo
 const HUMAN=[[242,193,78],[86,204,232],[226,104,206],[152,222,92],[244,134,64],[156,126,246],[232,232,232],[236,84,84]];
 function hsl(h,s,l){s/=100;l/=100;const k=n=>(n+h/30)%12,a=s*Math.min(l,1-l),f=n=>l-a*Math.max(-1,Math.min(k(n)-3,9-k(n),1));return[255*f(0)|0,255*f(8)|0,255*f(4)|0]}
 const KINDS=[null,
-  {id:'city',name:'City',cost:1000,desc:'+500 troop cap, +3 gold/s'},
-  {id:'market',name:'Market',cost:650,desc:'+8 gold/s'},
-  {id:'barracks',name:'Barracks',cost:800,desc:'Troops regrow +15/s'},
-  {id:'fort',name:'Fort',cost:500,desc:'Land within 22 tiles costs attackers 2.5× troops'},
-  {id:'silo',name:'Missile Silo',cost:2500,desc:'Lets you launch nukes'},
-  {id:'frigate',name:'Frigate',cost:1400,desc:'All-round warship: shoots boats, captures traders'},
-  {id:'nuke',name:'Atom Bomb',cost:4000,desc:'Wipes out everything within 26 tiles'},
-  {id:'port',name:'Port',cost:1100,desc:'Sends trade ships to other ports for gold'},
-  {id:'gunboat',name:'Gunboat',cost:700,desc:'Fast and cheap, light guns, short range'},
-  {id:'battleship',name:'Battleship',cost:3500,desc:'Slow and tough, heavy long-range guns'},
-  {id:'hbomb',name:'Hydrogen Bomb',cost:12000,desc:'Huge blast: wipes out everything within 50 tiles'},
-  {id:'airport',name:'Airport',cost:1800,desc:'Sends trade planes for gold, builds aircraft'},
-  {id:'fighter',name:'Fighter',cost:1300,desc:'Shoots down enemy planes and strafes boats'},
-  {id:'bomber',name:'Bomber Strike',cost:1600,desc:'Flies in from your airport, flattens buildings and troops within 10 tiles'},
-  {id:'oil',name:'Oil Rig',cost:3000,desc:'+30 gold/s at sea. Takes 90 s to build; enemy warships can seize it'},
+  {id:'city',name:'City',cost:1500,desc:'+500 troop cap, +3 gold/s'},
+  {id:'market',name:'Market',cost:1000,desc:'+8 gold/s'},
+  {id:'barracks',name:'Barracks',cost:1200,desc:'Troops regrow +15/s'},
+  {id:'fort',name:'Fort',cost:750,desc:'Land within 22 tiles costs attackers 2.5× troops'},
+  {id:'silo',name:'Missile Silo',cost:6000,desc:'Lets you launch nukes'},
+  {id:'frigate',name:'Frigate',cost:2000,desc:'All-round warship: shoots boats, captures traders'},
+  {id:'nuke',name:'Atom Bomb',cost:12000,desc:'Wipes out everything within 26 tiles'},
+  {id:'port',name:'Port',cost:1600,desc:'Sends trade ships to other ports for gold'},
+  {id:'gunboat',name:'Gunboat',cost:1000,desc:'Fast and cheap, light guns, short range'},
+  {id:'battleship',name:'Battleship',cost:6000,desc:'Slow and tough, heavy long-range guns'},
+  {id:'hbomb',name:'Hydrogen Bomb',cost:45000,desc:'Huge blast: wipes out everything within 50 tiles'},
+  {id:'airport',name:'Airport',cost:3000,desc:'Sends trade planes for gold, builds aircraft'},
+  {id:'fighter',name:'Fighter',cost:2200,desc:'Shoots down enemy planes and strafes boats'},
+  {id:'bomber',name:'Bomber Strike',cost:5000,desc:'Flies in from your airport, flattens buildings and troops within 10 tiles'},
+  {id:'oil',name:'Oil Rig',cost:6000,desc:'+30 gold/s at sea. Takes 90 s to build; enemy warships can seize it'},
   {id:'airlift',name:'Troop Plane',cost:0,desc:'Flies part of your army from your airport and lands it right here'},
-  {id:'mirv',name:'MIRV',cost:25000,desc:'Splits over the target realm into 12 warheads that strike all across its land'},
-  {id:'factory',name:'Factory',cost:2200,desc:'+4 gold/s, and lays railroads to nearby buildings, even in other countries'}];
+  {id:'mirv',name:'MIRV',cost:120000,desc:'Splits over the target realm into 12 warheads that strike all across its land'},
+  {id:'factory',name:'Factory',cost:4000,desc:'+4 gold/s, and lays railroads to nearby buildings, even in other countries'}];
 // construction time in ticks (10 ticks = 1 second)
 const BUILD_T={1:150,2:100,3:120,4:80,5:300,8:200,12:250,15:900,18:200};
+// buildings can be upgraded to level 5; each level adds the building's effect again (or more range/speed)
+const MAX_LV=5,UPG=new Set([1,2,3,4,8,12,15,18]);
+const UPG_TXT={1:'Each level adds +500 troop cap and +3 gold/s.',2:'Each level adds +8 gold/s.',3:'Each level adds +15 troops/s regrowth.',4:'Each level widens its protected area by 5 tiles.',
+  8:'Each level sends trade ships more often.',12:'Each level sends trade planes more often.',15:'Each level adds +30 gold/s.',18:'Each level adds +4 gold/s and one more railroad.'};
+const lvOf=b=>b.lv||1,upCost=b=>Math.round(KINDS[b.k].cost*.9*lvOf(b));
+function upgrade(id,tile){const i=bAt[tile];if(i<0)return false;const b=buildings[i],n=nat[id];if(!b||b.dead||bOwner(b)!==id||!UPG.has(b.k)||!ready(b)||lvOf(b)>=MAX_LV)return false;
+  const c=upCost(b);if(n.gold<c)return false;n.gold-=c;b.lv=lvOf(b)+1;b.dur=Math.round(bt(b.k)*.6);b.done=simTick+b.dur;return true}
+// the building of yours closest to a tile, within a few tiles
+function myBuildingNear(id,tile,r=6){const x0=tile%W,y0=(tile/W)|0;let best=null,bd=1e9;
+  for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){const x=x0+dx,y=y0+dy;if(x<0||y<0||x>=W||y>=H)continue;const j=bAt[y*W+x];if(j<0)continue;const b=buildings[j];if(b.dead||bOwner(b)!==id)continue;const d=dx*dx+dy*dy;if(d<bd){bd=d;best=b}}return best}
 const OIL_R=30,OIL_SEIZE=8,MAX_AIRLIFT=3;
 const isAir=k=>k===13,AIR={trade:{speed:3.2,hp:20},fighter:{speed:4,hp:70,range:10,dmg:14,cool:4},bomber:{speed:2.6,hp:80,r:10}};
 const isBomb=k=>k===7||k===11||k===17,BOMB_R={7:26,11:50,17:16},MIRV_HEADS=12;
@@ -383,14 +419,14 @@ function build(id,tile,k){const n=nat[id];if(!n||!n.alive||!KINDS[k]||tile<0||ti
     const dx=tile%W-from%W,dy=((tile/W)|0)-((from/W)|0);missiles.push({a:id,from,to:tile,t:0,r:BOMB_R[k],dur:Math.min(80,(k===11?35:25)+Math.round(Math.sqrt(dx*dx+dy*dy)/20))});return true}
   if(!canPlace(id,tile))return false;
   n.gold-=c;n.b[k]++;bAt[tile]=buildings.length;buildings.push({t:tile,k,done:simTick+bt(k)});return true}
-function recount(){for(const n of nat){n.b=new Array(19).fill(0);n.e=new Array(19).fill(0)}fortOwner.fill(-1);
+function recount(){for(const n of nat){n.b=new Array(19).fill(0);n.e=new Array(19).fill(0);n.f=new Array(19).fill(0)}fortOwner.fill(-1);
   for(const s of ships){nat[s.a].b[s.k]++;nat[s.a].e[s.k]++}
   for(const q of planes)if(q.k===13){nat[q.a].b[13]++;nat[q.a].e[13]++}
-  for(const b of buildings){if(b.dead)continue;const o=bOwner(b);if(o<0)continue;nat[o].b[b.k]++;if(!ready(b))continue;nat[o].e[b.k]++;
-    if(b.k===4){const x=b.t%W,y=(b.t/W)|0;for(let dy=-FORT_R;dy<=FORT_R;dy++)for(let dx=-FORT_R;dx<=FORT_R;dx++){if(dx*dx+dy*dy>FORT_R*FORT_R)continue;
+  for(const b of buildings){if(b.dead)continue;const o=bOwner(b);if(o<0)continue;nat[o].b[b.k]++;if(!ready(b)&&!(b.lv>1))continue;nat[o].f[b.k]++;nat[o].e[b.k]+=ready(b)?lvOf(b):lvOf(b)-1;
+    if(b.k===4){const FR=FORT_R+(lvOf(b)-1)*5,x=b.t%W,y=(b.t/W)|0;for(let dy=-FR;dy<=FR;dy++)for(let dx=-FR;dx<=FR;dx++){if(dx*dx+dy*dy>FR*FR)continue;
       const xx=x+dx,yy=y+dy;if(xx<0||yy<0||xx>=W||yy>=H)continue;const i=yy*W+xx;if(own[i]===o)fortOwner[i]=o}}}}
 
-function addNation(name,rgb,bot){nat.push({id:nat.length,name,rgb,troops:200,gold:400,b:new Array(19).fill(0),tiles:0,coast:0,sx:0,sy:0,alive:true,e:new Array(19).fill(0),grudge:{},allies:{},req:{},bot,cool:20+Math.floor(rng()*30),bcool:60+Math.floor(rng()*120)});borders.push(new Set())}
+function addNation(name,rgb,bot){nat.push({id:nat.length,name,rgb,troops:3000,gold:400,b:new Array(19).fill(0),tiles:0,coast:0,sx:0,sy:0,alive:true,e:new Array(19).fill(0),f:new Array(19).fill(0),grudge:{},allies:{},req:{},bot,cool:20+Math.floor(rng()*30),bcool:60+Math.floor(rng()*120)});borders.push(new Set())}
 const PRE=["Ash","Bren","Cal","Dun","Esk","Fer","Gal","Hal","Isel","Kad","Mor","Orr","Quill","Sable","Tarn","Uld","Vess","Wyn","Thal","Ren"];
 const SUF=["mark","vale","moor","reach","gard","holt","wick","ford","crest","lund","haven","fell","by","mere","stead","wold","hurst","shire","dale","port"];
 const botName=k=>k<NAMES.length?NAMES[k]:PRE[k%20]+SUF[(Math.floor(k/20)+k)%20];
@@ -569,7 +605,7 @@ function airStrike(a,cx,cy,R){
 function stepAir(){
   // trade planes from airports
   const aps=buildings.filter(b=>ready(b)&&b.k===12&&own[b.t]>=0);
-  if(aps.length>=2)for(const ap of aps){if(--ap.cd>0)continue;ap.cd=150+Math.floor(rng()*110);if(planes.filter(q=>q.k===0).length>=MAX_TRADE_PLANES)continue;
+  if(aps.length>=2)for(const ap of aps){if(--ap.cd>0)continue;ap.cd=Math.round((150+Math.floor(rng()*110))/(1+.35*(lvOf(ap)-1)));if(planes.filter(q=>q.k===0).length>=MAX_TRADE_PLANES)continue;
     const o=own[ap.t];let dest=null;for(let t=0;t<8;t++){const c=aps[Math.floor(rng()*aps.length)];if(c===ap)continue;dest=c;if(allied(o,own[c.t]))break;if(own[c.t]!==o&&t>3)break}
     if(!dest)continue;planes.push({a:o,k:0,x:ap.t%W,y:(ap.t/W)|0,tx:dest.t%W,ty:(dest.t/W)|0,dest:dest.t,dist:Math.sqrt(d2(ap.t,dest.t)),hp:AIR.trade.hp})}
   for(const q of planes){if(q.hp<=0)continue;q.px=q.x;q.py=q.y;
@@ -604,20 +640,20 @@ function stepRails(){
   rails=rails.filter(r=>!r.fb.dead&&!r.tb.dead&&own[r.fb.t]>=0&&bOwner(r.tb)>=0);
   // lay new track from one factory every few ticks
   if(simTick%15===0){const fs=buildings.filter(b=>b.k===18&&ready(b)&&own[b.t]>=0);if(fs.length){const f=fs[railRR++%fs.length];
-    const mine=rails.filter(r=>r.fb===f||r.tb===f);if(mine.length<RAIL_MAX){const cands=[];
+    const mine=rails.filter(r=>r.fb===f||r.tb===f);if(mine.length<RAIL_MAX+lvOf(f)-1){const cands=[];
       for(const b of buildings){if(b===f||!ready(b)||!RAIL_KINDS.includes(b.k)||bOwner(b)<0)continue;const d=d2(f.t,b.t);if(d>RAIL_R*RAIL_R)continue;
         if(rails.some(r=>(r.fb===f&&r.tb===b)||(r.fb===b&&r.tb===f)))continue;if(b.k===18&&rails.filter(r=>r.fb===b||r.tb===b).length>=RAIL_MAX)continue;if(b.norail&&b.norail[f.t])continue;cands.push([d,b])}
       cands.sort((a,b)=>a[0]-b[0]);const pick=cands[0];
-      if(pick){const path=landPath(f.t,pick[1].t);if(path&&path.length>4)rails.push({fb:f,tb:pick[1],path,pos:0,dir:1});else{pick[1].norail=pick[1].norail||{};pick[1].norail[f.t]=1}}}}}
+      if(pick){const path=landPath(f.t,pick[1].t);if(path&&path.length>4)rails.push({fb:f,tb:pick[1],path,pos:0,dir:1,laid:1});else{pick[1].norail=pick[1].norail||{};pick[1].norail[f.t]=1}}}}}
   // trains shuttle along each line; every arrival pays out
-  for(const r of rails){const A=own[r.fb.t],B=bOwner(r.tb);r.stop=hostile(A,B);if(r.stop)continue;
+  for(const r of rails){if(r.laid<r.path.length){r.laid=Math.min(r.path.length,r.laid+1.2);continue}const A=own[r.fb.t],B=bOwner(r.tb);r.stop=hostile(A,B);if(r.stop)continue;
     r.pos+=r.dir*TRAIN_SPEED;const L=r.path.length-1;
     if(r.pos>=L||r.pos<=0){r.pos=Math.max(0,Math.min(L,r.pos));r.dir=-r.dir;
       const al=allied(A,B),g=Math.round((12+L*.1)*(al?1.3:1));nat[A].gold+=g;if(B!==A&&nat[B].alive)nat[B].gold+=Math.round(g*(al?.5:.3));
       if(A===P&&r.pos===0)floats.push({t:r.fb.t,text:'+'+g,at:performance.now()})}}}
 function stepTrade(){
   const ports=buildings.filter(b=>ready(b)&&b.k===8&&own[b.t]>=0);
-  if(ports.length>=2)for(const p of ports){if(--p.cd>0)continue;p.cd=140+Math.floor(rng()*120);if(traders.length>=MAX_TRADERS)continue;
+  if(ports.length>=2)for(const p of ports){if(--p.cd>0)continue;p.cd=Math.round((140+Math.floor(rng()*120))/(1+.35*(lvOf(p)-1)));if(traders.length>=MAX_TRADERS)continue;
     const o=own[p.t];let dest=null;for(let t=0;t<8;t++){const c=ports[Math.floor(rng()*ports.length)];if(c===p)continue;dest=c;if(allied(o,own[c.t]))break;if(own[c.t]!==o&&t>3)break}
     if(!dest)continue;const path=waterPath(p.w,dest.w);if(!path||path.length<8)continue;
     traders.push({a:o,home:o,path,pos:0,dest:dest.t})}
@@ -645,7 +681,8 @@ function detonate(a,c,R){
   blasts.push({c,r:R,at:performance.now()})}
 
 // the one way any player's order enters the simulation
-function applyInput(id,tile,r,k){if(k===17){build(id,tile,17);return}
+function applyInput(id,tile,r,k){if(k===19){upgrade(id,tile);return}
+  if(k===17){build(id,tile,17);return}
   if(k>=20&&k<=25){if(tile>=0&&tile<nat.length)diplomacy(id,tile,k,r);return}
   if(k===16&&land[tile]&&allied(id,own[tile]))return;if(k===16){const n=nat[id];if(!n||!n.alive)return;const send=Math.floor(n.troops*r/100);if(send>=5&&launchAirlift(id,tile,send))n.troops-=send;return}
   if((k>=1&&k<=15)||k===18){build(id,tile,k);return}const n=nat[id];if(!n||!n.alive||tile<0||tile>=N||!land[tile])return;const t=own[tile];
@@ -677,6 +714,7 @@ const DF=()=>DIFFS[diff];
 // ---------- bots ----------
 function botBuild(b){
   if(--b.bcool>0)return;b.bcool=40+Math.floor(rng()*80);
+  if(rng()<.2){const mineB=buildings.filter(x=>!x.dead&&UPG.has(x.k)&&bOwner(x)===b.id&&ready(x)&&lvOf(x)<3);if(mineB.length){const x=mineB[Math.floor(rng()*mineB.length)];if(b.gold>=upCost(x)*1.5){upgrade(b.id,x.t);return}}}
   if(b.tiles>1800&&b.b[18]<2&&rng()<.07&&b.gold>=costOf(b,18)*1.2){const arr=borders[b.id];let idx=Math.floor(rng()*arr.size),t=-1;for(const i of arr){if(idx--<=0){t=i;break}}
     if(t>=0){const x=t%W,y=(t/W)|0;for(let s2=0;s2<8;s2++){const xx=Math.max(0,Math.min(W-1,x+Math.round((rng()-.5)*60))),yy=Math.max(0,Math.min(H-1,y+Math.round((rng()-.5)*60))),i=yy*W+xx;if(canPlace(b.id,i)){build(b.id,i,18);return}}}}
   if(diff===2&&b.e[5]>0&&b.gold>=KINDS[17].cost*1.5&&simTick>3000&&rng()<.04){let tgt=null;for(const o of nat)if(o.alive&&o.id!==b.id&&angry(b,o.id)&&!allied(b.id,o.id)&&(!tgt||o.tiles>tgt.tiles))tgt=o;
@@ -881,13 +919,19 @@ function drawMissiles(alpha){
     ctx.strokeStyle=`rgba(232,112,90,${1-t})`;ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,R*(.6+t*.9),0,Math.PI*2);ctx.stroke()}}
 function drawRails(){if(!rails.length)return;const step=Math.max(1,Math.round(3/Math.max(.5,scale)));
   ctx.lineCap='round';ctx.lineJoin='round';
-  for(const r of rails){const p=r.path;ctx.beginPath();for(let j=0;j<p.length;j+=step){const x=ox+(p[j]%W+.5)*scale,y=oy+(((p[j]/W)|0)+.5)*scale;j?ctx.lineTo(x,y):ctx.moveTo(x,y)}
+  const now=performance.now();
+  for(const r of rails){const full=r.path,n=Math.max(2,Math.floor(r.laid??full.length)),p=n<full.length?full.slice(0,n):full;ctx.beginPath();for(let j=0;j<p.length;j+=step){const x=ox+(p[j]%W+.5)*scale,y=oy+(((p[j]/W)|0)+.5)*scale;j?ctx.lineTo(x,y):ctx.moveTo(x,y)}
     const e=p[p.length-1];ctx.lineTo(ox+(e%W+.5)*scale,oy+(((e/W)|0)+.5)*scale);
     ctx.strokeStyle='rgba(20,14,10,.75)';ctx.lineWidth=Math.max(2.5,scale*1.1);ctx.stroke();
-    ctx.strokeStyle=r.stop?'rgba(232,112,90,.75)':'rgba(214,190,150,.85)';ctx.lineWidth=Math.max(1,scale*.4);ctx.setLineDash([Math.max(2,scale*.9),Math.max(2,scale*.6)]);ctx.stroke();ctx.setLineDash([])}
+    ctx.strokeStyle=r.stop?'rgba(232,112,90,.75)':'rgba(214,190,150,.85)';ctx.lineWidth=Math.max(1,scale*.4);ctx.setLineDash([Math.max(2,scale*.9),Math.max(2,scale*.6)]);ctx.stroke();ctx.setLineDash([]);
+    if(p!==full){// work crew at the end of the line: a glowing marker and a faint guide to where the track is heading
+      const t=p[p.length-1],x=ox+(t%W+.5)*scale,y=oy+(((t/W)|0)+.5)*scale,e2=full[full.length-1],pulse=.5+.5*Math.sin(now/120);
+      ctx.strokeStyle='rgba(214,190,150,.25)';ctx.lineWidth=1;ctx.setLineDash([2,6]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ox+(e2%W+.5)*scale,oy+(((e2/W)|0)+.5)*scale);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=`rgba(255,214,120,${.35+.4*pulse})`;ctx.beginPath();ctx.arc(x,y,Math.max(4,scale*1.6)*(1+.3*pulse),0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fff4d0';ctx.beginPath();ctx.arc(x,y,Math.max(1.6,scale*.5),0,Math.PI*2);ctx.fill()}}
   // trains
   const z=Math.max(5,Math.min(12,scale*2));
-  for(const r of rails){if(r.stop)continue;const i0=Math.max(0,Math.min(r.path.length-1,Math.floor(r.pos))),t=r.path[i0],x=ox+(t%W+.5)*scale,y=oy+(((t/W)|0)+.5)*scale;
+  for(const r of rails){if(r.stop||(r.laid??1e9)<r.path.length)continue;const i0=Math.max(0,Math.min(r.path.length-1,Math.floor(r.pos))),t=r.path[i0],x=ox+(t%W+.5)*scale,y=oy+(((t/W)|0)+.5)*scale;
     if(x<-20||y<-20||x>vw+20||y>vh+20)continue;const o=own[r.fb.t];if(o<0)continue;const c=nat[o].rgb;
     ctx.fillStyle=`rgb(${Math.min(255,c[0]*1.25)},${Math.min(255,c[1]*1.25)},${Math.min(255,c[2]*1.25)})`;ctx.strokeStyle='#08141e';ctx.lineWidth=1.2;
     ctx.beginPath();ctx.rect(x-z*.6,y-z*.35,z*1.2,z*.7);ctx.fill();ctx.stroke()}}
@@ -898,7 +942,9 @@ function drawBuildings(){
     const building=b.done>simTick;ctx.globalAlpha=building?.5:1;
     ctx.fillStyle=`rgb(${Math.min(255,c[0]*1.25)},${Math.min(255,c[1]*1.25)},${Math.min(255,c[2]*1.25)})`;ctx.strokeStyle='#08141e';ctx.lineWidth=Math.max(1,z/7);
     drawIcon(ctx,b.k,x,y,z);ctx.globalAlpha=1;
-    if(building){const f=1-(b.done-simTick)/(bt(b.k)||1);ctx.strokeStyle='#08141e';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,z*.85,0,Math.PI*2);ctx.stroke();
+    if(lvOf(b)>1&&z>=8){const r=Math.max(5,z*.32),bx=x+z*.55,by=y-z*.55;ctx.fillStyle='#f2c14e';ctx.strokeStyle='#08141e';ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(bx,by,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.fillStyle='#1b1404';ctx.font=`700 ${Math.round(r*1.4)}px "IBM Plex Mono", monospace`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(lvOf(b),bx,by+.5)}
+    if(building){const f=1-(b.done-simTick)/(b.dur||bt(b.k)||1);ctx.strokeStyle='#08141e';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,z*.85,0,Math.PI*2);ctx.stroke();
       ctx.strokeStyle='#f2c14e';ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,z*.85,-Math.PI/2,-Math.PI/2+f*Math.PI*2);ctx.stroke()}}}
 function drawIcon(g,k,x,y,s){const h=s/2;g.beginPath();
   if(k===1){g.moveTo(x-h,y+h);g.lineTo(x-h,y-h*.2);g.lineTo(x,y-h);g.lineTo(x+h,y-h*.2);g.lineTo(x+h,y+h);g.closePath()}
@@ -990,8 +1036,8 @@ function updateUI(){
     box.hidden=!rq.length||phase!=='play'}
   // build bar
   $('bbar').hidden=phase!=='play';if(phase==='play'){if(!$('bbar').children.length)makeBuildBar();
-    for(const el of $('bbar').children){const k=+el.dataset.k,c=costOf(me,k),inProg=me.b[k]-me.e[k];
-      el.querySelector('b').innerHTML=me.e[k]+(inProg>0?`<em> +${inProg}</em>`:'');el.querySelector('small').textContent=fmt(c);el.classList.toggle('poor',me.gold<c)}}
+    for(const el of $('bbar').children){const k=+el.dataset.k,c=costOf(me,k),inProg=me.b[k]-me.f[k];
+      el.querySelector('b').innerHTML=me.f[k]+(inProg>0?`<em> +${inProg}</em>`:'');el.querySelector('small').textContent=fmt(c);el.classList.toggle('poor',me.gold<c)}}
   // troop bar: at home vs max, plus troops out fighting
   const fight=attacks.reduce((t,a)=>a.a===P?t+a.troops:t,0)+boats.reduce((t,b)=>b.a===P?t+b.troops:t,0)+planes.reduce((t,q)=>q.k===16&&q.a===P?t+q.troops:t,0),cp=cap(me),tot=Math.max(cp,me.troops+fight);
   $('tbar').hidden=phase!=='play';$('tHome').textContent=fmt(me.troops);$('tCap').textContent=fmt(cp);$('tFight').textContent=fmt(fight);
@@ -1109,7 +1155,15 @@ function openBuild(cx0,cy0){
     else act('Propose alliance',20);
     m.append(dip);if(isAlly){const p=document.createElement('p');p.className='bnote ok';p.textContent='Allies. You can’t attack each other, and allied trade pays 50% more.';m.append(p)}}
   const note=t=>{const p=document.createElement('p');p.className='bnote';p.textContent=t;m.append(p)};
-  if(mine&&!ok)note('Too close to another building for new buildings. Pick a spot at least 8 tiles away.');
+  const near=(mine||sea)?myBuildingNear(P,i):null;
+  if(near&&UPG.has(near.k)){const lv=lvOf(near),up=document.createElement('button');up.type='button';up.className='upg';up.setAttribute('role','menuitem');
+    const busy=!ready(near),maxed=lv>=MAX_LV,c=upCost(near);up.disabled=busy||maxed||me.gold<c;
+    const ic=document.createElement('canvas');ic.width=ic.height=28;const g=ic.getContext('2d');g.fillStyle='#f2c14e';g.strokeStyle='#08141e';g.lineWidth=2;drawIcon(g,near.k,14,14,18);
+    const tx=document.createElement('span');tx.className='bt';const nm=document.createElement('b');nm.textContent=maxed?`${KINDS[near.k].name} · max level`:`Upgrade ${KINDS[near.k].name} to level ${lv+1}`;
+    const ds=document.createElement('small');ds.textContent=busy?'Still building. Wait for it to finish.':maxed?`Level ${MAX_LV} is the highest.`:`Level ${lv} now. ${UPG_TXT[near.k]}`;tx.append(nm,ds);
+    const pr=document.createElement('span');pr.className='bp';pr.textContent=maxed?'':fmt(c);up.append(ic,tx,pr);
+    up.onclick=()=>{order(near.t,0,19);toast(`Upgrading to level ${lv+1}. It takes ${Math.round(bt(near.k)*.6/10)} s.`);closeBuild()};m.append(up)}
+  if(mine&&!ok&&!near)note('Too close to another building for new buildings. Pick a spot at least 8 tiles away.');
   const coastal=mine&&shipSpot(P,i)>=0,hasPort=!!nearestPort(P,i),hasAir=me.e[12]>0,hasSilo=me.e[5]>0,rig=sea&&rigOk(P,i),
     list=mine?[1,2,3,4,5,18,12].concat(coastal?[8]:[],[13]):sea?[9,6,10,15]:allied(P,foe)?[]:[16,14,7,11,17];
   if(mine&&!coastal)note('Right-click your land near the sea to build a port.');
@@ -1286,7 +1340,7 @@ function onGamePeers(ch){
     }else{
       for(const p of peers){const idx=H_.players.findIndex(x=>x.p===p.peer);if(idx<1)continue;
         const acts=p.presence?.acts;if(!Array.isArray(acts))continue;
-        for(const a of acts){if(!Array.isArray(a))continue;const [s,tile,r,kk]=a;const k=Number.isInteger(kk)&&((kk>=0&&kk<=18)||(kk>=20&&kk<=25))?kk:0;
+        for(const a of acts){if(!Array.isArray(a))continue;const [s,tile,r,kk]=a;const k=Number.isInteger(kk)&&((kk>=0&&kk<=19)||(kk>=20&&kk<=25))?kk:0;
           if(!Number.isInteger(s)||s<=(H_.lastSeq[p.peer]||0))continue;H_.lastSeq[p.peer]=s;
           if(Number.isInteger(tile)&&tile>=0&&tile<N&&Number.isFinite(r))schedule(idx,tile,Math.max(5,Math.min(100,Math.round(r))),k)}}
     }
@@ -1420,7 +1474,7 @@ const TUT=[
  {t:'Crossing water',icons:[16],p:['Tap land across the water and a boat sails from your coast, carrying your Send share of troops. Warships can sink boats on the way.',
    'With an airport you can fly troops in instead. Right-click enemy land and pick Troop Plane, and they land exactly where you clicked.']},
  {t:'Gold and buildings',icons:[1,2,3,4,18,8,12],p:['You earn gold every second, and more as you grow. Drag a building from the bar at the bottom onto your land, or right-click your land (press and hold on a phone).',
-   'Buildings take a few seconds to finish. Factories earn gold and lay railroads to nearby buildings, even across borders, and every train trip pays. Cities raise your troop cap, Markets earn gold, Barracks speed up troop regrowth, and Forts make nearby land costly to attack.']},
+   'Buildings take a few seconds to finish. Right-click a building to upgrade it, up to level 5. Factories earn gold and lay railroads to nearby buildings, even across borders, and every train trip pays. Cities raise your troop cap, Markets earn gold, Barracks speed up troop regrowth, and Forts make nearby land costly to attack.']},
  {t:'Ports, airports and oil',icons:[8,12,15],p:['Ports and airports send trade ships and planes to other ports and airports, and each trip pays gold.',
    'Oil rigs go on the sea near your land. They pay a lot of gold but take 90 seconds to build, and an enemy warship nearby can seize one.']},
  {t:'Navy and air force',icons:[9,6,10,13],p:['Right-click the sea to build warships. You need a finished port, and the ship sails from it to the spot you picked.',
@@ -1567,4 +1621,5 @@ requestAnimationFrame(frame);
 })();
 </script>
 
-</body></html>
+</body>
+</html>
